@@ -1,0 +1,59 @@
+/* ═══════════════════════════════════════════════════════════════
+   src/style.css
+   Estilos globais da página e do wrapper do canvas.
+   Separado do HTML para respeitar a separação entre estrutura
+   (HTML) e apresentação (CSS).
+═══════════════════════════════════════════════════════════════ */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  font-family: 'Courier New', monospace;
+  color: #0ff;
+  overflow: hidden;
+}
+
+#gameWrapper {
+  position: relative;
+  display: inline-block;
+}
+
+canvas {
+  display: block;
+  border: 1px solid #0ff3;
+  box-shadow: 0 0 40px #0ff2, 0 0 80px #00f1;
+}
+
+/* HUD overlay — renderizado com Canvas 2D sobre o WebGL.
+   pointer-events:none garante que cliques passem para o canvas WebGL. */
+#hud {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Painel de atalhos de teclado abaixo do canvas */
+#keys {
+  margin-top: 12px;
+  font-size: 11px;
+  color: #0ff8;
+  text-align: center;
+  letter-spacing: 1px;
+}
+
+#keys span {
+  color: #ff0;
+}
