@@ -4,7 +4,49 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Galaxian WebGL</title>
+<<<<<<< HEAD
   <link rel="stylesheet" href="src/style.css" />
+=======
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+      color: #0ff;
+      overflow: hidden;
+    }
+    #gameWrapper {
+      position: relative;
+      display: inline-block;
+    }
+    canvas {
+      display: block;
+      border: 1px solid #0ff3;
+      box-shadow: 0 0 40px #0ff2, 0 0 80px #00f1;
+    }
+    /* ── HUD overlay (renderizado com Canvas 2D sobre o WebGL) ── */
+    #hud {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+    }
+    /* ── Painel de teclas ── */
+    #keys {
+      margin-top: 12px;
+      font-size: 11px;
+      color: #0ff8;
+      text-align: center;
+      letter-spacing: 1px;
+    }
+    #keys span { color: #ff0; }
+  </style>
+>>>>>>> d86f500c57a91a97dd21382029227d968ac49b75
 </head>
 <body>
 
@@ -21,6 +63,7 @@
   <span>R</span> reiniciar
 </div>
 
+<<<<<<< HEAD
 <!--
   ORDEM DE CARREGAMENTO — cada script só pode usar símbolos
   definidos nos scripts anteriores (sem bundler/módulos ES).
@@ -64,3 +107,952 @@
 
 </body>
 </html>
+=======
+<script>
+"use strict";
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/utils/constants.js
+   Constantes globais do jogo — evita "números mágicos" espalhados
+   pelo código. Centralizá-las facilita ajustes de balanceamento.
+═══════════════════════════════════════════════════════════════ */
+const CANVAS_W = 480;
+const CANVAS_H = 640;
+
+// Jogador
+const PLAYER_SPEED      = 280;   // px/s
+const PLAYER_W          = 40;
+const PLAYER_H          = 36;
+const PLAYER_Y          = CANVAS_H - 70;
+
+// Tiros do jogador
+const BULLET_SPEED      = 520;   // px/s (para cima)
+const BULLET_W          = 6;
+const BULLET_H          = 18;
+
+// Inimigos
+const ENEMY_COLS        = 8;
+const ENEMY_ROWS        = 4;
+const ENEMY_W           = 38;
+const ENEMY_H           = 28;
+const ENEMY_PAD_X       = 14;    // espaçamento horizontal entre inimigos
+const ENEMY_PAD_Y       = 12;    // espaçamento vertical
+const ENEMY_START_Y     = 60;    // topo da formação
+const ENEMY_SPEED_INIT  = 60;    // px/s lateral inicial
+const ENEMY_SPEED_INC   = 6;     // aceleração a cada morte
+const ENEMY_DROP        = 18;    // px que descem ao bater na borda
+
+// Tiros dos inimigos
+const EBULLET_SPEED     = 240;   // px/s (para baixo)
+const EBULLET_W         = 5;
+const EBULLET_H         = 16;
+const EBULLET_INTERVAL  = 1.4;   // segundos entre disparos inimigos
+const EBULLET_MAX       = 4;     // máximo de tiros inimigos simultâneos
+
+// Estados do jogo
+const STATE_RUNNING     = 'running';
+const STATE_PAUSED      = 'paused';
+const STATE_GAMEOVER    = 'gameover';
+const STATE_WIN         = 'win';
+const STATE_CONFIRM     = 'confirm'; // aguardando confirmação de reinício
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/utils/math.js
+   Utilitários matemáticos — AABB collision detection.
+   Usamos bounding-box (retângulo alinhado ao eixo) porque é
+   O(1), suficientemente preciso para sprites retangulares e
+   não exige tesselação por pixel.
+═══════════════════════════════════════════════════════════════ */
+function aabbOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+  // Retorna true se os dois retângulos se intersectam.
+  // ax/ay são o canto superior esquerdo; aw/ah são dimensões.
+  return ax < bx + bw &&
+         ax + aw > bx &&
+         ay < by + bh &&
+         ay + ah > by;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/render/shaders.js
+   Vertex e Fragment shaders escritos em GLSL.
+
+   DECISÃO: Um único par de shaders para todos os sprites.
+   O shader recebe coordenadas de textura (uv) e uma textura 2D.
+   Isso evita recompilação e troca de programa por objeto — apenas
+   trocamos a textura e o uniforme de posição/escala.
+
+   COORDENADAS: WebGL usa clip space [-1, 1]. Convertemos px→clip
+   via uniforme uResolution e uTransform (vec4: x, y, w, h em px).
+═══════════════════════════════════════════════════════════════ */
+const VERT_SRC = `
+  // Atributos por vértice (enviados via VBO)
+  attribute vec2 aPosition; // posição normalizada do quad [0,1]
+  attribute vec2 aTexCoord; // coordenada de textura [0,1]
+
+  // Uniforme: resolução do canvas (pixels)
+  uniform vec2  uResolution;
+  // Uniforme: rect do sprite em px (x, y, largura, altura)
+  uniform vec4  uTransform;
+
+  // Saída interpolada para o fragment shader
+  varying vec2 vTexCoord;
+
+  void main() {
+    // Expande o quad [0,1] para as dimensões do sprite em px
+    vec2 pixelPos = aPosition * uTransform.zw + uTransform.xy;
+
+    // Converte px → clip space [-1, 1]
+    // origin WebGL = centro; origin px = topo-esquerdo
+    vec2 clipPos = (pixelPos / uResolution) * 2.0 - 1.0;
+    clipPos.y = -clipPos.y; // inverte Y (px cresce ↓, clip cresce ↑)
+
+    gl_Position = vec4(clipPos, 0.0, 1.0);
+    vTexCoord   = aTexCoord;
+  }
+`;
+
+const FRAG_SRC = `
+  precision mediump float;
+
+  // Textura do sprite
+  uniform sampler2D uTexture;
+  // Cor de tint (vec4 rgba) — permite colorir sprites monocromáticos
+  uniform vec4 uTint;
+  // Opacidade global (usado para piscar o jogador)
+  uniform float uAlpha;
+
+  varying vec2 vTexCoord;
+
+  void main() {
+    vec4 texColor = texture2D(uTexture, vTexCoord);
+    // Multiplica pela cor de tint e opacidade
+    gl_FragColor  = texColor * uTint * vec4(1.0, 1.0, 1.0, uAlpha);
+  }
+`;
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/render/glContext.js
+   Inicialização do contexto WebGL e compilação dos shaders.
+
+   DECISÃO: Encapsular em objeto `GL` para não poluir o escopo
+   global com dezenas de variáveis soltas.
+═══════════════════════════════════════════════════════════════ */
+const GL = (() => {
+  const canvas = document.getElementById('glCanvas');
+  const gl     = canvas.getContext('webgl', { alpha: false });
+  if (!gl) throw new Error('WebGL não disponível neste navegador.');
+
+  // ── Compilação de shader ──────────────────────────────────────
+  function compileShader(type, src) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, src);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      // Log explícito para facilitar debug de GLSL
+      console.error('Shader error:', gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
+      return null;
+    }
+    return shader;
+  }
+
+  // ── Linkagem do programa ──────────────────────────────────────
+  const vert    = compileShader(gl.VERTEX_SHADER,   VERT_SRC);
+  const frag    = compileShader(gl.FRAGMENT_SHADER, FRAG_SRC);
+  const program = gl.createProgram();
+  gl.attachShader(program, vert);
+  gl.attachShader(program, frag);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(program));
+  }
+  gl.useProgram(program);
+
+  // ── Localização de atributos e uniformes ─────────────────────
+  // Fazemos isso UMA VEZ na inicialização — evita lookups por frame
+  const locs = {
+    aPosition:    gl.getAttribLocation(program,  'aPosition'),
+    aTexCoord:    gl.getAttribLocation(program,  'aTexCoord'),
+    uResolution:  gl.getUniformLocation(program, 'uResolution'),
+    uTransform:   gl.getUniformLocation(program, 'uTransform'),
+    uTexture:     gl.getUniformLocation(program, 'uTexture'),
+    uTint:        gl.getUniformLocation(program, 'uTint'),
+    uAlpha:       gl.getUniformLocation(program, 'uAlpha'),
+  };
+
+  // ── Buffers do quad ──────────────────────────────────────────
+  // Todos os sprites são um quad 2D com 4 vértices.
+  // Usamos um único VBO compartilhado — eficiente porque a geometria
+  // não muda; só a posição via uniforme uTransform muda.
+
+  // Posições normalizadas do quad [0,1] × [0,1]
+  // (duas triangulos formando um retângulo)
+  const positions = new Float32Array([
+    0, 0,   1, 0,   0, 1,   1, 1,
+  ]);
+  // Coordenadas de textura correspondentes
+  const texCoords = new Float32Array([
+    0, 0,   1, 0,   0, 1,   1, 1,
+  ]);
+
+  const posBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+  const uvBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, uvBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
+
+  // Habilita transparência (alpha blending)
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+  // Define resolução uma vez
+  gl.uniform2f(locs.uResolution, CANVAS_W, CANVAS_H);
+  gl.uniform1i(locs.uTexture, 0); // texture unit 0
+
+  return { gl, locs, posBuffer, uvBuffer };
+})();
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/render/textureLoader.js
+   Geração de texturas por canvas 2D (sem arquivos externos).
+
+   DECISÃO: Gerar texturas proceduralmente via Canvas 2D permite
+   rodar o jogo sem servidor HTTP — arquivos PNG externos exigem
+   CORS e um servidor local. Assim o jogo funciona diretamente
+   abrindo o index.html no navegador.
+
+   Cada textura é desenhada em um <canvas> temporário, depois
+   enviada à GPU com gl.texImage2D.
+═══════════════════════════════════════════════════════════════ */
+function makeTexture(draw, w, h) {
+  const { gl } = GL;
+  const c   = document.createElement('canvas');
+  c.width   = w; c.height = h;
+  const ctx = c.getContext('2d');
+  draw(ctx, w, h);
+
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  // Configura filtros — NEAREST preserva aparência pixelada (estilo retro)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  return tex;
+}
+
+// Textura da nave do jogador (triângulo futurista)
+function drawPlayer(ctx, w, h) {
+  ctx.clearRect(0, 0, w, h);
+  // Corpo principal
+  ctx.fillStyle = '#00e5ff';
+  ctx.beginPath();
+  ctx.moveTo(w/2, 2);
+  ctx.lineTo(w-4, h-4);
+  ctx.lineTo(w/2, h-12);
+  ctx.lineTo(4, h-4);
+  ctx.closePath();
+  ctx.fill();
+  // Motor / glow
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(w/2-4, h-14, 8, 6);
+  // Asas
+  ctx.fillStyle = '#0088aa';
+  ctx.beginPath();
+  ctx.moveTo(4, h-4); ctx.lineTo(w/2-4, h-14); ctx.lineTo(w/2, h-4); ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(w-4, h-4); ctx.lineTo(w/2+4, h-14); ctx.lineTo(w/2, h-4); ctx.closePath();
+  ctx.fill();
+  // Cockpit
+  ctx.fillStyle = '#80ffff';
+  ctx.beginPath();
+  ctx.ellipse(w/2, h/2-2, 5, 8, 0, 0, Math.PI*2);
+  ctx.fill();
+}
+
+// Textura do inimigo (inseto alienígena)
+function drawEnemy(ctx, w, h) {
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#ff3d00';
+  // Cabeça
+  ctx.beginPath();
+  ctx.ellipse(w/2, h/2-4, 10, 8, 0, 0, Math.PI*2);
+  ctx.fill();
+  // Olhos
+  ctx.fillStyle = '#ffeb3b';
+  ctx.beginPath(); ctx.arc(w/2-4, h/2-6, 3, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(w/2+4, h/2-6, 3, 0, Math.PI*2); ctx.fill();
+  // Patas
+  ctx.strokeStyle = '#ff7043'; ctx.lineWidth = 2;
+  for (let i = 0; i < 3; i++) {
+    const py = h/2 - 2 + i*5;
+    ctx.beginPath(); ctx.moveTo(w/2-10, py); ctx.lineTo(w/2-16, py+4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(w/2+10, py); ctx.lineTo(w/2+16, py+4); ctx.stroke();
+  }
+  // Corpo
+  ctx.fillStyle = '#b71c1c';
+  ctx.beginPath();
+  ctx.ellipse(w/2, h/2+4, 7, 8, 0, 0, Math.PI*2);
+  ctx.fill();
+}
+
+// Tiro do jogador (raio verde-ciano)
+function drawBullet(ctx, w, h) {
+  ctx.clearRect(0, 0, w, h);
+  const grad = ctx.createLinearGradient(0, h, 0, 0);
+  grad.addColorStop(0,   'rgba(0,255,200,0)');
+  grad.addColorStop(0.5, 'rgba(0,255,200,1)');
+  grad.addColorStop(1,   '#ffffff');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.roundRect(1, 0, w-2, h, 3);
+  ctx.fill();
+}
+
+// Tiro do inimigo (raio vermelho)
+function drawEnemyBullet(ctx, w, h) {
+  ctx.clearRect(0, 0, w, h);
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0,   '#ff1744');
+  grad.addColorStop(0.5, '#ff6d00');
+  grad.addColorStop(1,   'rgba(255,23,68,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.roundRect(1, 0, w-2, h, 3);
+  ctx.fill();
+}
+
+// Background estrelado
+function drawBackground(ctx, w, h) {
+  ctx.fillStyle = '#000814';
+  ctx.fillRect(0, 0, w, h);
+  // Estrelas aleatórias com seed determinístico para reprodutibilidade
+  let s = 42;
+  function rng() { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0xffffffff; }
+  for (let i = 0; i < 180; i++) {
+    const x = rng() * w;
+    const y = rng() * h;
+    const r = rng() * 1.5 + 0.3;
+    const a = rng() * 0.8 + 0.2;
+    ctx.fillStyle = `rgba(200,220,255,${a})`;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
+  }
+  // Nebulosa sutil
+  const g = ctx.createRadialGradient(w*0.5, h*0.3, 0, w*0.5, h*0.3, w*0.5);
+  g.addColorStop(0,   'rgba(30,0,60,0.4)');
+  g.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+}
+
+// Cria todas as texturas na inicialização
+const TEX = {
+  player:       makeTexture(drawPlayer,      PLAYER_W,  PLAYER_H),
+  enemy:        makeTexture(drawEnemy,       ENEMY_W,   ENEMY_H),
+  bullet:       makeTexture(drawBullet,      BULLET_W,  BULLET_H),
+  enemyBullet:  makeTexture(drawEnemyBullet, EBULLET_W, EBULLET_H),
+  background:   makeTexture(drawBackground,  CANVAS_W,  CANVAS_H),
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/render/renderer.js
+   Funções de renderização WebGL.
+
+   DECISÃO: Uma única função drawSprite() para todos os objetos.
+   Trocamos textura + uniforme uTransform a cada chamada.
+   Isso é eficiente o suficiente para a escala do jogo (~50 sprites).
+
+   Para jogos maiores usaríamos instanced rendering ou sprite batching,
+   mas aqui a clareza didática tem prioridade.
+═══════════════════════════════════════════════════════════════ */
+function drawSprite(tex, x, y, w, h, tint = [1,1,1,1], alpha = 1.0) {
+  const { gl, locs, posBuffer, uvBuffer } = GL;
+
+  // Bind da textura
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+
+  // Configura o buffer de posição
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+  gl.enableVertexAttribArray(locs.aPosition);
+  // stride=0, offset=0, 2 floats por vértice
+  gl.vertexAttribPointer(locs.aPosition, 2, gl.FLOAT, false, 0, 0);
+
+  // Configura o buffer de UV
+  gl.bindBuffer(gl.ARRAY_BUFFER, uvBuffer);
+  gl.enableVertexAttribArray(locs.aTexCoord);
+  gl.vertexAttribPointer(locs.aTexCoord, 2, gl.FLOAT, false, 0, 0);
+
+  // Passa transform (rect em pixels) para o vertex shader
+  gl.uniform4f(locs.uTransform, x, y, w, h);
+  // Tint color
+  gl.uniform4f(locs.uTint, tint[0], tint[1], tint[2], tint[3]);
+  // Alpha global
+  gl.uniform1f(locs.uAlpha, alpha);
+
+  // TRIANGLE_STRIP com 4 vértices forma um quad
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/systems/input.js
+   Sistema de input por teclado.
+
+   DECISÃO: Polling por frame (verificar `keys` a cada update) em vez
+   de apenas eventos. Isso garante movimento contínuo enquanto a tecla
+   estiver pressionada, sem depender de keydown repeat rate do OS.
+
+   keys = Set de teclas atualmente pressionadas.
+   justPressed = Set de teclas pressionadas NESTE frame (ação única).
+═══════════════════════════════════════════════════════════════ */
+const Input = (() => {
+  const keys        = new Set(); // teclas atualmente pressionadas
+  const justPressed = new Set(); // teclas pressionadas neste frame
+
+  window.addEventListener('keydown', e => {
+    if (!keys.has(e.code)) justPressed.add(e.code);
+    keys.add(e.code);
+    // Previne scroll da página com setas/espaço
+    if (['Space','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.code))
+      e.preventDefault();
+  });
+  window.addEventListener('keyup', e => {
+    keys.delete(e.code);
+  });
+
+  return {
+    isDown: code => keys.has(code),
+    // Verifica e consome o evento "pressed once"
+    wasPressed: code => {
+      if (justPressed.has(code)) { justPressed.delete(code); return true; }
+      return false;
+    },
+    // Limpa no fim do frame para não reutilizar eventos
+    clearFrame: () => justPressed.clear(),
+  };
+})();
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/core/state.js
+   Controle de estado do jogo.
+═══════════════════════════════════════════════════════════════ */
+const GameState = (() => {
+  let current      = STATE_RUNNING;
+  let prevState    = STATE_RUNNING; // restaurado ao cancelar confirm
+
+  return {
+    get: ()       => current,
+    set: s        => { current = s; },
+    savePrev: ()  => { prevState = current; },
+    getPrev: ()   => prevState,
+    is: s         => current === s,
+  };
+})();
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/entities/player.js
+   Entidade do jogador.
+═══════════════════════════════════════════════════════════════ */
+const Player = (() => {
+  let x, y, alive, blinkTimer, blinkAlpha;
+
+  function reset() {
+    x          = CANVAS_W / 2 - PLAYER_W / 2;
+    y          = PLAYER_Y;
+    alive      = true;
+    blinkTimer = 0;
+    blinkAlpha = 1;
+  }
+
+  function update(dt) {
+    // Movimento lateral com limites de tela
+    if (Input.isDown('ArrowLeft') || Input.isDown('KeyA')) {
+      x = Math.max(0, x - PLAYER_SPEED * dt);
+    }
+    if (Input.isDown('ArrowRight') || Input.isDown('KeyD')) {
+      x = Math.min(CANVAS_W - PLAYER_W, x + PLAYER_SPEED * dt);
+    }
+
+    // Piscar quando morto (efeito visual antes do game over)
+    if (!alive) {
+      blinkTimer += dt;
+      blinkAlpha  = Math.abs(Math.sin(blinkTimer * 15)) > 0.5 ? 0 : 1;
+    }
+  }
+
+  function draw() {
+    if (!alive && blinkAlpha === 0) return;
+    drawSprite(TEX.player, x, y, PLAYER_W, PLAYER_H, [1,1,1,1], alive ? 1 : blinkAlpha);
+  }
+
+  return {
+    reset, update, draw,
+    get x() { return x; },
+    get y() { return y; },
+    get alive() { return alive; },
+    kill() { alive = false; },
+    // Centro do sprite (para spawn do tiro)
+    get cx() { return x + PLAYER_W / 2; },
+    get cy() { return y; },
+  };
+})();
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/entities/bullet.js
+   Tiro do jogador — apenas 1 ativo por vez (regra clássica).
+═══════════════════════════════════════════════════════════════ */
+const Bullet = (() => {
+  let x, y, active;
+
+  function reset() { active = false; }
+
+  function fire(cx, originY) {
+    if (active) return; // limite: 1 tiro
+    x = cx - BULLET_W / 2;
+    y = originY - BULLET_H;
+    active = true;
+  }
+
+  function update(dt) {
+    if (!active) return;
+    y -= BULLET_SPEED * dt;
+    if (y + BULLET_H < 0) active = false; // saiu da tela
+  }
+
+  function draw() {
+    if (!active) return;
+    drawSprite(TEX.bullet, x, y, BULLET_W, BULLET_H);
+  }
+
+  return {
+    reset, fire, update, draw,
+    get active() { return active; },
+    get x()      { return x; },
+    get y()      { return y; },
+    deactivate() { active = false; },
+  };
+})();
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/entities/enemy.js + /src/systems/enemySystem.js
+   Entidades inimigas + sistema de movimento em bloco.
+
+   ESTRUTURA: Array de objetos `{x, y, alive}` com índice [row][col]
+   linearizado. O bloco inteiro tem um offset (blockX, blockY) que
+   se move lateralmente; cada inimigo tem posição relativa fixa.
+
+   DECISÃO: Separar posição absoluta = blockOffset + posRelativa
+   evita ter que atualizar N posições — apenas o offset muda.
+═══════════════════════════════════════════════════════════════ */
+const EnemySystem = (() => {
+  let enemies  = [];   // [{col, row, relX, relY, alive}]
+  let blockX   = 0;    // offset X do bloco (px)
+  let blockY   = 0;    // offset Y do bloco (px)
+  let dir      = 1;    // 1=direita, -1=esquerda
+  let speed    = ENEMY_SPEED_INIT;
+  let eBullets = [];   // [{x, y, active}]
+  let shootTimer = 0;
+
+  // Largura total da formação em px
+  const formationW = ENEMY_COLS * (ENEMY_W + ENEMY_PAD_X) - ENEMY_PAD_X;
+  // Margem para detectar colisão com borda
+  const MARGIN = 10;
+
+  function reset() {
+    enemies = [];
+    speed   = ENEMY_SPEED_INIT;
+    dir     = 1;
+    // Centraliza o bloco horizontalmente
+    blockX  = (CANVAS_W - formationW) / 2;
+    blockY  = ENEMY_START_Y;
+    eBullets = [];
+    shootTimer = 0;
+
+    for (let row = 0; row < ENEMY_ROWS; row++) {
+      for (let col = 0; col < ENEMY_COLS; col++) {
+        enemies.push({
+          col,
+          row,
+          // Posição relativa fixa dentro do bloco
+          relX: col * (ENEMY_W + ENEMY_PAD_X),
+          relY: row * (ENEMY_H + ENEMY_PAD_Y),
+          alive: true,
+        });
+      }
+    }
+  }
+
+  function aliveList() {
+    return enemies.filter(e => e.alive);
+  }
+
+  function update(dt) {
+    // ── Movimento lateral do bloco ──────────────────────────
+    blockX += dir * speed * dt;
+
+    // Detecta colisão com bordas considerando a largura do bloco
+    // "bloco mínimo X" = posição do inimigo mais à esquerda vivo
+    const alive = aliveList();
+    if (!alive.length) return;
+
+    let minRelX = Infinity, maxRelX = -Infinity;
+    for (const e of alive) {
+      if (e.relX < minRelX) minRelX = e.relX;
+      if (e.relX > maxRelX) maxRelX = e.relX;
+    }
+    const leftEdge  = blockX + minRelX;
+    const rightEdge = blockX + maxRelX + ENEMY_W;
+
+    if (dir === 1 && rightEdge >= CANVAS_W - MARGIN) {
+      dir    = -1;
+      blockY += ENEMY_DROP;  // desce ao bater na borda direita
+    } else if (dir === -1 && leftEdge <= MARGIN) {
+      dir    = 1;
+      blockY += ENEMY_DROP;  // desce ao bater na borda esquerda
+    }
+
+    // ── Tiros dos inimigos ──────────────────────────────────
+    shootTimer += dt;
+    if (shootTimer >= EBULLET_INTERVAL && eBullets.filter(b=>b.active).length < EBULLET_MAX) {
+      shootTimer = 0;
+      // Escolhe inimigo vivo aleatoriamente da fileira da frente
+      // (os de maior `row` que ainda estão vivos em cada coluna)
+      const frontEnemies = [];
+      for (let col = 0; col < ENEMY_COLS; col++) {
+        const colEnemies = alive.filter(e => e.col === col).sort((a,b) => b.row - a.row);
+        if (colEnemies.length) frontEnemies.push(colEnemies[0]);
+      }
+      if (frontEnemies.length) {
+        const shooter = frontEnemies[Math.floor(Math.random() * frontEnemies.length)];
+        const sx = blockX + shooter.relX + ENEMY_W/2 - EBULLET_W/2;
+        const sy = blockY + shooter.relY + ENEMY_H;
+        eBullets.push({ x: sx, y: sy, active: true });
+      }
+    }
+
+    // Atualiza tiros inimigos
+    for (const b of eBullets) {
+      if (!b.active) continue;
+      b.y += EBULLET_SPEED * dt;
+      if (b.y > CANVAS_H) b.active = false;
+    }
+    // Remove tiros inativos do array para não crescer indefinidamente
+    if (eBullets.length > 50) eBullets = eBullets.filter(b => b.active);
+  }
+
+  function draw() {
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const ex = blockX + e.relX;
+      const ey = blockY + e.relY;
+      drawSprite(TEX.enemy, ex, ey, ENEMY_W, ENEMY_H);
+    }
+    for (const b of eBullets) {
+      if (b.active) drawSprite(TEX.enemyBullet, b.x, b.y, EBULLET_W, EBULLET_H);
+    }
+  }
+
+  // Chamado quando um inimigo é morto — acelera o bloco
+  function killEnemy(e) {
+    e.alive = false;
+    speed  += ENEMY_SPEED_INC;
+  }
+
+  return {
+    reset, update, draw, aliveList, killEnemy,
+    get blockX()   { return blockX; },
+    get blockY()   { return blockY; },
+    get eBullets() { return eBullets; },
+    // Posição absoluta de cada inimigo vivo (para colisão)
+    absPos: e => ({ x: blockX + e.relX, y: blockY + e.relY }),
+  };
+})();
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/systems/collision.js
+   Sistema de detecção de colisões AABB.
+═══════════════════════════════════════════════════════════════ */
+const CollisionSystem = (() => {
+  function check() {
+    if (!GameState.is(STATE_RUNNING)) return;
+
+    const alive = EnemySystem.aliveList();
+
+    // ── Tiro do jogador ↔ inimigos ──────────────────────────
+    if (Bullet.active) {
+      for (const e of alive) {
+        const ep = EnemySystem.absPos(e);
+        if (aabbOverlap(Bullet.x, Bullet.y, BULLET_W, BULLET_H,
+                        ep.x, ep.y, ENEMY_W, ENEMY_H)) {
+          Bullet.deactivate();
+          EnemySystem.killEnemy(e);
+          break; // 1 tiro = 1 inimigo
+        }
+      }
+    }
+
+    // ── Tiros inimigos ↔ jogador ────────────────────────────
+    if (Player.alive) {
+      for (const b of EnemySystem.eBullets) {
+        if (!b.active) continue;
+        if (aabbOverlap(b.x, b.y, EBULLET_W, EBULLET_H,
+                        Player.x, Player.y, PLAYER_W, PLAYER_H)) {
+          b.active = false;
+          Player.kill();
+          // Aguarda 0.6s antes de exibir game over (efeito de piscar)
+          setTimeout(() => GameState.set(STATE_GAMEOVER), 600);
+          return;
+        }
+      }
+
+      // ── Jogador ↔ inimigos (colisão direta) ──────────────
+      for (const e of alive) {
+        const ep = EnemySystem.absPos(e);
+        if (aabbOverlap(Player.x, Player.y, PLAYER_W, PLAYER_H,
+                        ep.x, ep.y, ENEMY_W, ENEMY_H)) {
+          Player.kill();
+          setTimeout(() => GameState.set(STATE_GAMEOVER), 600);
+          return;
+        }
+      }
+    }
+
+    // ── Condição de vitória ─────────────────────────────────
+    if (alive.length === 0) {
+      GameState.set(STATE_WIN);
+    }
+
+    // ── Inimigos chegaram ao chão ───────────────────────────
+    for (const e of alive) {
+      const ep = EnemySystem.absPos(e);
+      if (ep.y + ENEMY_H >= PLAYER_Y) {
+        Player.kill();
+        setTimeout(() => GameState.set(STATE_GAMEOVER), 600);
+        return;
+      }
+    }
+  }
+
+  return { check };
+})();
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/systems/shootingSystem.js
+   Sistema de disparo do jogador (debounce incluso).
+═══════════════════════════════════════════════════════════════ */
+const ShootingSystem = (() => {
+  let cooldown = 0; // segundos até poder atirar novamente
+
+  function update(dt) {
+    if (cooldown > 0) cooldown -= dt;
+    if (Input.wasPressed('Space') && cooldown <= 0 && Player.alive) {
+      Bullet.fire(Player.cx, Player.cy);
+      cooldown = 0.15; // debounce leve
+    }
+  }
+
+  function reset() { cooldown = 0; }
+
+  return { update, reset };
+})();
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/render/hudRenderer.js
+   HUD com Canvas 2D (texto, overlays de estado).
+   DECISÃO: Usar Canvas 2D sobre o WebGL para texto porque
+   WebGL nativo não tem suporte a texto — precisaríamos de
+   font atlas complexo. Canvas 2D é a abordagem prática.
+═══════════════════════════════════════════════════════════════ */
+const HUD = (() => {
+  const canvas = document.getElementById('hud');
+  const ctx    = canvas.getContext('2d');
+  let score    = 0;
+
+  function clear() { ctx.clearRect(0, 0, CANVAS_W, CANVAS_H); }
+
+  function drawText(text, x, y, size, color, align='center') {
+    ctx.font      = `bold ${size}px "Courier New", monospace`;
+    ctx.fillStyle = color;
+    ctx.textAlign = align;
+    ctx.fillText(text, x, y);
+  }
+
+  function drawShadowText(text, x, y, size, color, shadow='#000') {
+    ctx.font        = `bold ${size}px "Courier New", monospace`;
+    ctx.textAlign   = 'center';
+    ctx.fillStyle   = shadow;
+    ctx.fillText(text, x+2, y+2);
+    ctx.fillStyle   = color;
+    ctx.fillText(text, x, y);
+  }
+
+  function render(state, kills) {
+    clear();
+
+    // Pontuação
+    score = kills * 100;
+    drawText(`PONTOS: ${score}`, 16, 22, 14, '#0ff', 'left');
+
+    // Linha separadora inferior
+    ctx.strokeStyle = '#0ff3';
+    ctx.beginPath(); ctx.moveTo(0, CANVAS_H-45); ctx.lineTo(CANVAS_W, CANVAS_H-45); ctx.stroke();
+
+    if (state === STATE_PAUSED) {
+      // Overlay semitransparente
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      drawShadowText('⏸  PAUSADO', CANVAS_W/2, CANVAS_H/2 - 16, 32, '#ffff00');
+      drawText('Pressione P ou ESC para continuar', CANVAS_W/2, CANVAS_H/2 + 24, 13, '#fff8');
+    }
+
+    if (state === STATE_GAMEOVER) {
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      drawShadowText('GAME OVER', CANVAS_W/2, CANVAS_H/2 - 30, 42, '#ff1744');
+      drawText(`PONTOS FINAIS: ${score}`, CANVAS_W/2, CANVAS_H/2 + 14, 18, '#fff');
+      drawText('Pressione R para reiniciar', CANVAS_W/2, CANVAS_H/2 + 44, 14, '#aaa');
+    }
+
+    if (state === STATE_WIN) {
+      ctx.fillStyle = 'rgba(0,0,40,0.75)';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      drawShadowText('VOCÊ VENCEU!', CANVAS_W/2, CANVAS_H/2 - 30, 38, '#00e676');
+      drawText(`PONTOS: ${score}`, CANVAS_W/2, CANVAS_H/2 + 14, 18, '#fff');
+      drawText('Pressione R para reiniciar', CANVAS_W/2, CANVAS_H/2 + 44, 14, '#aaa');
+    }
+
+    if (state === STATE_CONFIRM) {
+      ctx.fillStyle = 'rgba(0,0,0,0.72)';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      // Caixa de diálogo
+      ctx.fillStyle = '#001';
+      ctx.strokeStyle = '#0ff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.roundRect(CANVAS_W/2 - 160, CANVAS_H/2 - 70, 320, 140, 8);
+      ctx.fill(); ctx.stroke();
+      drawShadowText('Deseja reiniciar?', CANVAS_W/2, CANVAS_H/2 - 28, 24, '#fff');
+      drawText('[ ENTER ] Sim     [ ESC ] Não', CANVAS_W/2, CANVAS_H/2 + 14, 15, '#0ff');
+    }
+  }
+
+  return { render, get score() { return score; } };
+})();
+
+/* ═══════════════════════════════════════════════════════════════
+   📁 /src/core/game.js
+   Loop principal do jogo.
+
+   requestAnimationFrame fornece:
+   - Sincronização com vsync do monitor
+   - Pausa automática quando aba está oculta (economiza CPU)
+   - timestamp de alta precisão para cálculo de delta time
+
+   DELTA TIME: `dt = (now - prev) / 1000` em segundos.
+   Multiplicar velocidades por dt garante que o jogo rode na mesma
+   velocidade independente do frame rate do hardware.
+   Clampamos em 0.1s para evitar "explosão" após alt+tab.
+═══════════════════════════════════════════════════════════════ */
+const Game = (() => {
+  let lastTime = 0;
+  let kills    = 0;
+  let rafId    = 0;
+
+  function resetAll() {
+    kills = 0;
+    Player.reset();
+    Bullet.reset();
+    ShootingSystem.reset();
+    EnemySystem.reset();
+    GameState.set(STATE_RUNNING);
+  }
+
+  function handleStateInputs() {
+    const state = GameState.get();
+
+    // ── Pausa ──────────────────────────────────────────────
+    if ((Input.wasPressed('KeyP') || Input.wasPressed('Escape')) &&
+        state !== STATE_GAMEOVER && state !== STATE_WIN && state !== STATE_CONFIRM) {
+      GameState.set(state === STATE_PAUSED ? STATE_RUNNING : STATE_PAUSED);
+      return;
+    }
+
+    // ── Solicitar reinício ─────────────────────────────────
+    if (Input.wasPressed('KeyR') && state !== STATE_CONFIRM) {
+      GameState.savePrev();
+      GameState.set(STATE_CONFIRM);
+      return;
+    }
+
+    // ── Confirmação de reinício ────────────────────────────
+    if (state === STATE_CONFIRM) {
+      if (Input.wasPressed('Enter') || Input.wasPressed('KeyY')) {
+        resetAll();
+      } else if (Input.wasPressed('Escape') || Input.wasPressed('KeyN')) {
+        GameState.set(GameState.getPrev());
+      }
+    }
+  }
+
+  function update(dt) {
+    const state = GameState.get();
+    if (state !== STATE_RUNNING) return;
+
+    Player.update(dt);
+    ShootingSystem.update(dt);
+    Bullet.update(dt);
+    EnemySystem.update(dt);
+    CollisionSystem.check();
+
+    // Conta inimigos mortos para pontuação
+    kills = ENEMY_COLS * ENEMY_ROWS - EnemySystem.aliveList().length;
+  }
+
+  function render() {
+    const { gl } = GL;
+
+    // Limpa o framebuffer com cor de fundo (preto)
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    // Desenha background estrelado
+    drawSprite(TEX.background, 0, 0, CANVAS_W, CANVAS_H);
+
+    // Entidades
+    EnemySystem.draw();
+    Bullet.draw();
+    Player.draw();
+
+    // HUD (Canvas 2D)
+    HUD.render(GameState.get(), kills);
+  }
+
+  function loop(timestamp) {
+    const dt = Math.min((timestamp - lastTime) / 1000, 0.1);
+    lastTime = timestamp;
+
+    handleStateInputs();
+    update(dt);
+    render();
+
+    Input.clearFrame(); // limpa justPressed APÓS processar tudo no frame
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function start() {
+    resetAll();
+    rafId = requestAnimationFrame(ts => { lastTime = ts; loop(ts); });
+  }
+
+  return { start };
+})();
+
+// ── Ponto de entrada ──────────────────────────────────────────
+Game.start();
+</script>
+</body>
+</html>
+>>>>>>> d86f500c57a91a97dd21382029227d968ac49b75
