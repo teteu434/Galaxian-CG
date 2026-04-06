@@ -1,118 +1,383 @@
 // ═══════════════════════════════════════════════════════════════
 // src/core/game.js
-// Loop principal do jogo: update + render a cada frame.
+// Loop principal do jogo - VERSÃO CORRIGIDA
 //
-// requestAnimationFrame é preferido a setInterval porque:
-//   - Sincroniza com o vsync do monitor (sem tearing)
-//   - Pausa automaticamente quando a aba fica oculta (economiza CPU)
-//   - Fornece timestamp de alta precisão para delta time
-//
-// Delta time (dt): diferença de tempo entre frames em segundos.
-//   Multiplicar todas as velocidades por dt garante que o jogo
-//   rode na mesma velocidade em qualquer frame rate (30fps ou 144fps).
-//   Clampar dt em 0.1s evita "explosão" de posição após alt+tab.
-//
-// Dependências:
-//   GL              (render/glContext.js)
-//   TEX             (render/textureLoader.js)
-//   drawSprite      (render/renderer.js)
-//   HUD             (render/hudRenderer.js)
-//   Input           (systems/input.js)
-//   GameState       (core/state.js)
-//   Player          (entities/player.js)
-//   Bullet          (entities/bullet.js)
-//   EnemySystem     (systems/enemySystem.js)
-//   CollisionSystem (systems/collision.js)
-//   ShootingSystem  (systems/shootingSystem.js)
-//   CANVAS_W/H, STATE_*, ENEMY_COLS, ENEMY_ROWS (constants.js)
-// Exporta (global): Game
+// CORREÇÕES APLICADAS:
+//   - Cooldown de dano (invencibilidade temporária) → 3 vidas reais
+//   - Troca de abas usa HUD.setTab() em vez de atribuir HUD.optionsTab
+//   - HUD.setNewRecord() chamado ao salvar high score
+//   - High score persiste corretamente no localStorage
+//   - damageCooldown zerado no resetAll()
 // ═══════════════════════════════════════════════════════════════
 "use strict";
 
 const Game = (() => {
-  let lastTime = 0;
-  let kills    = 0; // inimigos eliminados na partida atual
-  let rafId    = 0; // ID do requestAnimationFrame (para cancelamento futuro)
+  let lastTime  = 0;
+  let kills     = 0;
+  let rafId     = 0;
+  let lives     = 3;
 
-  // ── Reset completo do estado do jogo ─────────────────────────
+  // ─── High Score ───────────────────────────────────────────────
+  // Carregado do localStorage na inicialização.
+  // Salvo sempre que um novo recorde é batido.
+  let highScore = parseInt(localStorage.getItem('galaxian_highscore') || '0');
+
+  // ─── Cooldown de dano (invencibilidade temporária) ────────────
+  // Sem esse cooldown, múltiplos projéteis consecutivos drenam as
+  // 3 vidas em milissegundos, dando a impressão de 1 vida só.
+  let damageCooldown = 0;
+  const DAMAGE_COOLDOWN = 1.8; // segundos de invencibilidade após levar dano
+
+  let hasShownTutorial = localStorage.getItem(TUTORIAL_COMPLETED_KEY) === 'true';
+
+  let mouseX = CANVAS_W / 2;
+  let mouseY = CANVAS_H / 2;
+
+  let remappingAction = null;
+
+  const PLAYER_MIN_X = 0;
+  const PLAYER_MAX_X = CANVAS_W - PLAYER_W;
+
+  // ─────────────────────────────────────────────────────────────
+  // RESET COMPLETO
+  // ─────────────────────────────────────────────────────────────
   function resetAll() {
-    kills = 0;
+    kills          = 0;
+    lives          = 3;
+    damageCooldown = 0;      // ← zerar cooldown ao reiniciar
     Player.reset();
     Bullet.reset();
     ShootingSystem.reset();
     EnemySystem.reset();
+    HUD.setLives(lives);
+    HUD.setHighScore(highScore);
+    HUD.setNewRecord(false);  // ← limpar flag de recorde
+    AudioSystem.stopBackgroundMusic();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // INICIAR JOGO
+  // ─────────────────────────────────────────────────────────────
+  function startGame() {
+    resetAll();
     GameState.set(STATE_RUNNING);
+    AudioSystem.startBackgroundMusic();
+
+    if (!hasShownTutorial) {
+      hasShownTutorial = true;
+      localStorage.setItem(TUTORIAL_COMPLETED_KEY, 'true');
+    }
   }
 
-  // ── Tratamento de inputs que afetam o estado global ──────────
-  // Separado de update() para que funcione mesmo fora de STATE_RUNNING
-  function handleStateInputs() {
-    const state = GameState.get();
+  // ─────────────────────────────────────────────────────────────
+  // SALVAR HIGH SCORE (helper interno)
+  // ─────────────────────────────────────────────────────────────
+  function checkAndSaveHighScore(finalScore) {
+    if (finalScore > highScore) {
+      highScore = finalScore;
+      localStorage.setItem('galaxian_highscore', highScore); // persistência
+      HUD.setHighScore(highScore);
+      HUD.setNewRecord(true);   // ← informa o HUD que é um novo recorde
+      return true;
+    }
+    return false;
+  }
 
-    // Pausa / retomar — disponível em running e paused
-    if (
-      (Input.wasPressed('KeyP') || Input.wasPressed('Escape')) &&
-      state !== STATE_GAMEOVER &&
-      state !== STATE_WIN      &&
-      state !== STATE_CONFIRM
-    ) {
-      GameState.set(state === STATE_PAUSED ? STATE_RUNNING : STATE_PAUSED);
-      return;
+  // ─────────────────────────────────────────────────────────────
+  // GAME OVER
+  // ─────────────────────────────────────────────────────────────
+  function gameOver() {
+    GameState.set(STATE_GAMEOVER);
+    AudioSystem.stopBackgroundMusic();
+    AudioSystem.playGameOver();
+    checkAndSaveHighScore(kills * 100);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // VITÓRIA
+  // ─────────────────────────────────────────────────────────────
+  function winGame() {
+    GameState.set(STATE_WIN);
+    AudioSystem.stopBackgroundMusic();
+    checkAndSaveHighScore(kills * 100);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // VOLTAR AO MENU
+  // ─────────────────────────────────────────────────────────────
+  function goToMenu() {
+    resetAll();
+    GameState.set(STATE_MENU);
+    AudioSystem.stopBackgroundMusic();
+    HUD.closeOptions();
+    HUD.closePopup();
+  }
+
+  function goToTutorial() {
+    GameState.set(STATE_TUTORIAL);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // CRIA INPUT PARA UPLOAD DE ARQUIVO DE ÁUDIO
+  // ─────────────────────────────────────────────────────────────
+  function createFileUpload(soundName, callback) {
+    const input  = document.createElement('input');
+    input.type   = 'file';
+    input.accept = 'audio/mpeg, audio/wav, audio/ogg';
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (file) callback(soundName, file);
+    };
+    input.click();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // CONFIGURA CALLBACKS DO HUD
+  // ─────────────────────────────────────────────────────────────
+  function setupHUDCallbacks() {
+    const originalHandleClick = HUD.handleClick;
+
+    HUD.handleClick = (mx, my, _externalCallbacks) => {
+      if (HUD.isRemapping && HUD.isRemapping()) return false;
+
+      return originalHandleClick(mx, my, {
+        // Menu principal
+        play: () => { hasShownTutorial ? startGame() : goToTutorial(); },
+        options: () => { HUD.showOptions(); },
+        credits: () => { HUD.showPopup('credits'); },
+
+        // Tutorial
+        start: () => { startGame(); },
+        skip:  () => { startGame(); },
+
+        // Pós-jogo (game over / vitória)
+        restart: () => { startGame(); },
+        menu:    () => { goToMenu();  },
+
+        // Fechar popups
+        close_popup:    () => { HUD.closePopup();   },
+        close_options:  () => { HUD.closeOptions(); remappingAction = null; },
+
+        // Abas de opções — usa HUD.setTab() para alterar a variável interna do HUD
+        tabGameplay: () => { HUD.setTab('gameplay'); },
+        tabSound:    () => { HUD.setTab('sound');    },
+
+        // Jogabilidade
+        mouseControl: () => {
+          SettingsSystem.set('mouseControl', !SettingsSystem.get('mouseControl'));
+        },
+        resetControls: () => {
+          SettingsSystem.set('keyLeft',    ['ArrowLeft',  'KeyA']);
+          SettingsSystem.set('keyRight',   ['ArrowRight', 'KeyD']);
+          SettingsSystem.set('keyShoot',   ['Space']);
+          SettingsSystem.set('keyPause',   ['KeyP', 'Escape']);
+          SettingsSystem.set('keyRestart', ['KeyR']);
+        },
+
+        // Remapeamento
+        remapLeft:  () => { remappingAction = 'keyLeft';  HUD.startRemapping('keyLeft');  },
+        remapRight: () => { remappingAction = 'keyRight'; HUD.startRemapping('keyRight'); },
+        remapShoot: () => { remappingAction = 'keyShoot'; HUD.startRemapping('keyShoot'); },
+
+        // Upload de áudio personalizado
+        uploadShoot:      () => { createFileUpload('playerShoot',     (n, f) => AudioSystem.loadCustomSound(n, f)); },
+        uploadEnemyShoot: () => { createFileUpload('enemyShoot',      (n, f) => AudioSystem.loadCustomSound(n, f)); },
+        uploadExplosion:  () => { createFileUpload('explosion',        (n, f) => AudioSystem.loadCustomSound(n, f)); },
+        uploadDamage:     () => { createFileUpload('damage',           (n, f) => AudioSystem.loadCustomSound(n, f)); },
+        uploadGameOver:   () => { createFileUpload('gameOver',         (n, f) => AudioSystem.loadCustomSound(n, f)); },
+        uploadMusic:      () => { createFileUpload('backgroundMusic',  (n, f) => AudioSystem.loadCustomSound(n, f)); }
+      });
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // EVENTOS DO MOUSE
+  // ─────────────────────────────────────────────────────────────
+  function setupMouseEvents() {
+    const canvas    = document.getElementById('glCanvas');
+    const hudCanvas = document.getElementById('hud');
+
+    function updateMousePosition(e) {
+      const rect   = canvas.getBoundingClientRect();
+      const scaleX = canvas.width  / rect.width;
+      const scaleY = canvas.height / rect.height;
+      mouseX = (e.clientX - rect.left) * scaleX;
+      mouseY = (e.clientY - rect.top)  * scaleY;
+      HUD.updateHover(mouseX, mouseY);
     }
 
-    // Solicitar reinício — disponível em qualquer estado exceto dentro do próprio confirm
-    if (Input.wasPressed('KeyR') && state !== STATE_CONFIRM) {
-      GameState.savePrev();          // salva estado atual para restaurar se cancelar
-      GameState.set(STATE_CONFIRM);
-      return;
-    }
+    canvas.addEventListener('mousemove',    updateMousePosition);
+    hudCanvas.addEventListener('mousemove', updateMousePosition);
 
-    // Responder ao diálogo de confirmação
-    if (state === STATE_CONFIRM) {
-      if (Input.wasPressed('Enter') || Input.wasPressed('KeyY')) {
-        resetAll();
-      } else if (Input.wasPressed('Escape') || Input.wasPressed('KeyN')) {
-        GameState.set(GameState.getPrev()); // cancela → volta ao estado anterior
+    canvas.addEventListener('click', (e) => {
+      const rect   = canvas.getBoundingClientRect();
+      const scaleX = canvas.width  / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const cx = (e.clientX - rect.left) * scaleX;
+      const cy = (e.clientY - rect.top)  * scaleY;
+
+      if (remappingAction) return; // ignorar cliques durante remapeamento
+
+      const handled = HUD.handleClick(cx, cy, {});
+      if (!handled && GameState.is(STATE_RUNNING)) {
+        ShootingSystem.shoot();
+        AudioSystem.playPlayerShoot();
       }
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // REMAPEAMENTO DE TECLAS (via teclado)
+  // ─────────────────────────────────────────────────────────────
+  function setupKeyboardRemapping() {
+    document.addEventListener('keydown', (e) => {
+      if (!remappingAction) return;
+      e.preventDefault();
+
+      if (e.code === 'Escape') {
+        remappingAction = null;
+        HUD.cancelRemapping();
+        return;
+      }
+
+      const currentKeys = SettingsSystem.get(remappingAction) || [];
+      if (!currentKeys.includes(e.code)) {
+        SettingsSystem.setKeyMapping(remappingAction, e.code);
+      }
+
+      remappingAction = null;
+      HUD.cancelRemapping();
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // INPUTS DO TECLADO POR ESTADO DO JOGO
+  // ─────────────────────────────────────────────────────────────
+  function handleStateInputs() {
+    const state    = GameState.get();
+    const settings = SettingsSystem.getAll();
+
+    if (remappingAction) return;
+
+    const isLeftPressed  = settings.keyLeft?.some(k => Input.isDown(k))    || false;
+    const isRightPressed = settings.keyRight?.some(k => Input.isDown(k))   || false;
+    const isShootPressed = Input.wasPressedAny(settings.keyShoot   || ['Space']);
+    const isPausePressed = Input.wasPressedAny(settings.keyPause   || ['KeyP', 'Escape']);
+    const isRestartPressed = Input.wasPressedAny(settings.keyRestart || ['KeyR']);
+
+    // Movimento via teclado
+    if (state === STATE_RUNNING && !settings.mouseControl) {
+      const dt = 0.016;
+      if (isLeftPressed)  Player.setX(Math.max(PLAYER_MIN_X, Math.min(Player.x - PLAYER_SPEED * dt, PLAYER_MAX_X)));
+      if (isRightPressed) Player.setX(Math.max(PLAYER_MIN_X, Math.min(Player.x + PLAYER_SPEED * dt, PLAYER_MAX_X)));
+    }
+
+    if (state === STATE_MENU && (isShootPressed || Input.wasPressed('Enter'))) {
+      hasShownTutorial ? startGame() : goToTutorial();
+      return;
+    }
+
+    if (state === STATE_TUTORIAL) {
+      if (isShootPressed || Input.wasPressed('Enter')) { startGame(); return; }
+      if (isPausePressed) { goToMenu(); return; }
+    }
+
+    if (state === STATE_RUNNING && isPausePressed) {
+      GameState.set(STATE_PAUSED);
+      AudioSystem.stopBackgroundMusic();
+      return;
+    }
+
+    if (state === STATE_PAUSED && isPausePressed) {
+      GameState.set(STATE_RUNNING);
+      AudioSystem.startBackgroundMusic();
+      return;
+    }
+
+    if ((state === STATE_GAMEOVER || state === STATE_WIN) && isRestartPressed) {
+      startGame();
+      return;
+    }
+
+    if (state === STATE_CONFIRM) {
+      if (isRestartPressed || Input.wasPressed('Enter') || Input.wasPressed('KeyY')) startGame();
+      else if (isPausePressed || Input.wasPressed('KeyN')) GameState.set(STATE_RUNNING);
     }
   }
 
-  // ── Atualização da lógica do jogo ─────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // UPDATE DA LÓGICA
+  // ─────────────────────────────────────────────────────────────
   function update(dt) {
-    // Lógica só roda durante o estado ativo
-    if (!GameState.is(STATE_RUNNING)) return;
+    const state    = GameState.get();
+    const settings = SettingsSystem.getAll();
 
-    Player.update(dt);
-    ShootingSystem.update(dt);
-    Bullet.update(dt);
-    EnemySystem.update(dt);
-    CollisionSystem.check();
+    if (state === STATE_RUNNING) {
+      // Controle por mouse
+      if (settings.mouseControl && mouseX >= 0 && mouseX <= CANVAS_W) {
+        let targetX = Math.max(PLAYER_MIN_X, Math.min(mouseX - PLAYER_W / 2, PLAYER_MAX_X));
+        Player.setX(targetX);
+      }
 
-    // Pontuação = total de inimigos - vivos restantes
-    kills = ENEMY_COLS * ENEMY_ROWS - EnemySystem.aliveList().length;
+      Player.update(dt);
+      ShootingSystem.update(dt);
+      Bullet.update(dt);
+      EnemySystem.update(dt);
+
+      // ── Cooldown de dano ──────────────────────────────────────
+      // Impede que múltiplas colisões simultâneas ou em frames
+      // consecutivos drenem todas as vidas de uma vez.
+      if (damageCooldown > 0) {
+        damageCooldown -= dt;
+      }
+
+      const hit = CollisionSystem.check();
+      if (hit && Player.alive && damageCooldown <= 0) {
+        lives--;
+        damageCooldown = DAMAGE_COOLDOWN; // invencibilidade temporária
+        HUD.setLives(lives);
+        AudioSystem.playDamage();
+
+        if (lives <= 0) {
+          Player.kill();
+          gameOver();
+        }
+      }
+
+      // Pontuação
+      kills = ENEMY_COLS * ENEMY_ROWS - EnemySystem.aliveList().length;
+
+      // Vitória
+      if (EnemySystem.aliveList().length === 0) winGame();
+    }
   }
 
-  // ── Renderização ──────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────────────────────
   function render() {
     const { gl } = GL;
-
-    // Limpa o framebuffer WebGL com preto antes de cada frame
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    // Ordem de desenho: fundo → inimigos → tiro → jogador → HUD
     drawSprite(TEX.background, 0, 0, CANVAS_W, CANVAS_H);
-    EnemySystem.draw();
-    Bullet.draw();
-    Player.draw();
 
-    // HUD é desenhado no Canvas 2D sobreposto (não interfere no WebGL)
-    HUD.render(GameState.get(), kills);
+    const state = GameState.get();
+
+    if (state === STATE_RUNNING || state === STATE_PAUSED ||
+        state === STATE_GAMEOVER || state === STATE_WIN || state === STATE_CONFIRM) {
+      EnemySystem.draw();
+      Bullet.draw();
+      Player.draw();
+    }
+
+    HUD.render(state, kills, lives, highScore);
   }
 
-  // ── Loop principal ────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // LOOP PRINCIPAL
+  // ─────────────────────────────────────────────────────────────
   function loop(timestamp) {
-    // Delta time em segundos, clampeado para evitar saltos grandes
     const dt = Math.min((timestamp - lastTime) / 1000, 0.1);
     lastTime = timestamp;
 
@@ -120,21 +385,30 @@ const Game = (() => {
     update(dt);
     render();
 
-    // Limpa justPressed APÓS todo o processamento do frame,
-    // garantindo que todos os sistemas possam ler os eventos
     Input.clearFrame();
-
     rafId = requestAnimationFrame(loop);
   }
 
-  // ── Ponto de início ───────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // INICIALIZAÇÃO
+  // ─────────────────────────────────────────────────────────────
   function start() {
+    setupMouseEvents();
+    setupKeyboardRemapping();
+    setupHUDCallbacks();
+
     resetAll();
-    // Primeiro frame: inicializa lastTime antes de entrar no loop
-    rafId = requestAnimationFrame(ts => {
-      lastTime = ts;
-      loop(ts);
-    });
+    GameState.set(STATE_MENU);
+
+    if (typeof SettingsSystem !== 'undefined') SettingsSystem.load();
+
+    if (typeof AudioSystem !== 'undefined') {
+      AudioSystem.init();
+      const settings = SettingsSystem ? SettingsSystem.getAll() : DEFAULT_SETTINGS;
+      AudioSystem.updateSettings(settings);
+    }
+
+    rafId = requestAnimationFrame(ts => { lastTime = ts; loop(ts); });
   }
 
   return { start };

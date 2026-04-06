@@ -2,6 +2,8 @@
 // src/entities/player.js
 // Entidade do jogador: posição, movimento, efeito de morte.
 //
+// MODIFICADO: Adicionado suporte para controle por mouse via setX()
+//
 // Dependências:
 //   Input       (systems/input.js)
 //   drawSprite  (render/renderer.js)
@@ -23,7 +25,7 @@ const Player = (() => {
   }
 
   function update(dt) {
-    // Movimento lateral contínuo (polling) com clamping nas bordas
+    // Movimento lateral contínuo via teclado (polling) com clamping nas bordas
     if (Input.isDown('ArrowLeft') || Input.isDown('KeyA')) {
       x = Math.max(0, x - PLAYER_SPEED * dt);
     }
@@ -45,10 +47,20 @@ const Player = (() => {
     drawSprite(TEX.player, x, y, PLAYER_W, PLAYER_H, [1, 1, 1, 1], alive ? 1 : blinkAlpha);
   }
 
+  /**
+   * Define a posição X do jogador (usado para controle por mouse)
+   * @param {number} newX - Nova posição X em pixels
+   */
+  function setX(newX) {
+    // Aplica clamping para manter dentro dos limites da tela
+    x = Math.max(0, Math.min(CANVAS_W - PLAYER_W, newX));
+  }
+
   return {
     reset,
     update,
     draw,
+    setX,           // NOVO: método para controle por mouse
     get x()     { return x; },
     get y()     { return y; },
     get alive() { return alive; },

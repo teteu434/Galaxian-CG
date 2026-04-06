@@ -2,24 +2,23 @@
 // src/core/state.js
 // Máquina de estados do jogo.
 //
-// Estados possíveis (definidos em constants.js):
-//   STATE_RUNNING  → jogo em execução normal
-//   STATE_PAUSED   → jogo congelado
-//   STATE_GAMEOVER → jogador morreu
-//   STATE_WIN      → todos inimigos eliminados
-//   STATE_CONFIRM  → aguardando confirmação de reinício
+// Estados possíveis:
+//   STATE_MENU      → tela inicial com menu
+//   STATE_TUTORIAL  → tela de tutorial
+//   STATE_RUNNING   → jogo em execução normal
+//   STATE_PAUSED    → jogo congelado
+//   STATE_GAMEOVER  → jogador morreu
+//   STATE_WIN       → todos inimigos eliminados
+//   STATE_CONFIRM   → aguardando confirmação de reinício
 //
-// prevState é salvo antes de entrar em STATE_CONFIRM para que,
-// ao cancelar, o jogo volte ao estado correto (running ou paused).
-//
-// Dependências: STATE_RUNNING (constants.js)
+// Dependências: STATE_* (constants.js)
 // Exporta (global): GameState
 // ═══════════════════════════════════════════════════════════════
 "use strict";
 
 const GameState = (() => {
-  let current   = STATE_RUNNING;
-  let prevState = STATE_RUNNING; // estado antes de abrir o diálogo de confirmação
+  let current   = STATE_MENU; // Alterado: inicia no MENU
+  let prevState = STATE_MENU; // estado antes de abrir o diálogo de confirmação
 
   return {
     /** Retorna o estado atual. */
