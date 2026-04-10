@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Galaxian WebGL</title>
+  <link rel="stylesheet" href="src/style.css" />
+</head>
+<body>
+
+<div id="gameWrapper">
+  <!-- Canvas principal WebGL -->
+  <canvas id="glCanvas" width="480" height="640"></canvas>
+  <!-- Canvas 2D para HUD (texto, overlays) -->
+  <canvas id="hud" width="480" height="640"></canvas>
+</div>
+<div id="keys">
+  <span>← →</span> ou <span>A D</span> mover &nbsp;|&nbsp;
+  <span>ESPAÇO</span> atirar &nbsp;|&nbsp;
+  <span>P / ESC</span> pausar &nbsp;|&nbsp;
+  <span>R</span> reiniciar
+</div>
+
+<!--
+  ORDEM DE CARREGAMENTO — cada script só pode usar símbolos
+  definidos nos scripts anteriores (sem bundler/módulos ES).
+  A sequência respeita o grafo de dependências:
+
+  1.  utils/constants.js      — sem dependências
+  2.  utils/math.js           — sem dependências
+  3.  render/shaders.js       — sem dependências (strings GLSL puras)
+  4.  render/glContext.js     — usa: VERT_SRC, FRAG_SRC, CANVAS_W, CANVAS_H
+  5.  render/textureLoader.js — usa: GL, PLAYER_W/H, ENEMY_W/H, BULLET_W/H,
+                                      EBULLET_W/H, CANVAS_W, CANVAS_H
+  6.  render/renderer.js      — usa: GL
+  7.  systems/input.js        — sem dependências de jogo
+  8.  core/state.js           — usa: STATE_RUNNING
+  9.  entities/player.js      — usa: Input, drawSprite, TEX, constantes de player
+  10. entities/bullet.js      — usa: drawSprite, TEX, constantes de bullet
+  11. systems/enemySystem.js  — usa: drawSprite, TEX, constantes de inimigos
+  12. systems/collision.js    — usa: GameState, EnemySystem, Bullet, Player,
+                                      aabbOverlap, constantes
+  13. systems/shootingSystem.js — usa: Input, Bullet, Player
+  14. render/hudRenderer.js   — usa: CANVAS_W, CANVAS_H, STATE_*
+  15. core/game.js            — usa: todos os sistemas e entidades
+  16. main.js                 — ponto de entrada, chama Game.start()
+-->
+<script src="src/utils/constants.js"></script>
+<script src="src/utils/math.js"></script>
+<script src="src/options/audioSystem.js"></script>
+<script src="src/options/settingSystem.js"></script>
+<script src="src/render/shaders.js"></script>
+<script src="src/render/glContext.js"></script>
+<script src="src/render/textureLoader.js"></script>
+<script src="src/render/renderer.js"></script>
+<script src="src/systems/input.js"></script>
+<script src="src/core/state.js"></script>
+<script src="src/entities/player.js"></script>
+<script src="src/entities/bullet.js"></script>
+<script src="src/systems/enemySystem.js"></script>
+<script src="src/systems/collision.js"></script>
+<script src="src/systems/shootingSystem.js"></script>
+<script src="src/render/hudRenderer.js"></script>
+<script src="src/core/game.js"></script>
+<script src="src/main.js"></script>
+
+</body>
+</html>
