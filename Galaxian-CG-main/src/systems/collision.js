@@ -29,7 +29,6 @@ const CollisionSystem = (() => {
     if (!GameState.is(STATE_RUNNING)) return;
 
     const alive = EnemySystem.aliveList();
-
     // ── 1. Tiro do jogador ↔ inimigos ────────────────────────
     if (Bullet.active) {
       for (const e of alive) {
@@ -38,6 +37,7 @@ const CollisionSystem = (() => {
           Bullet.x, Bullet.y, BULLET_W, BULLET_H,
           ep.x,     ep.y,     ENEMY_W,  ENEMY_H
         )) {
+          console.log(`[CollisionSystem] Tiro atingiu inimigo ${e}!`);
           Bullet.deactivate();   // remove o tiro
           EnemySystem.killEnemy(e); // destrói o inimigo
           break; // 1 tiro = 1 inimigo; para de verificar
@@ -54,10 +54,7 @@ const CollisionSystem = (() => {
           Player.x, Player.y, PLAYER_W,  PLAYER_H
         )) {
           b.active = false;
-          Player.kill();
-          // Aguarda 600ms (efeito de piscar) antes de exibir game over
-          setTimeout(() => GameState.set(STATE_GAMEOVER), 600);
-          return; // encerra todas as verificações do frame
+          return true;
         }
       }
 
@@ -70,7 +67,7 @@ const CollisionSystem = (() => {
         )) {
           Player.kill();
           setTimeout(() => GameState.set(STATE_GAMEOVER), 600);
-          return;
+          return true;
         }
       }
 
@@ -80,7 +77,7 @@ const CollisionSystem = (() => {
         if (ep.y + ENEMY_H >= PLAYER_Y) {
           Player.kill();
           setTimeout(() => GameState.set(STATE_GAMEOVER), 600);
-          return;
+          return true;
         }
       }
     }

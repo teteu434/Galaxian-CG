@@ -46,6 +46,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   keyShoot:      ['Space'],
   keyPause:      ['KeyP', 'Escape'],
   keyRestart:    ['KeyR'],
+  keyboardControl: true,
   mouseControl:  false,
   masterVolume:  0.7,
   musicVolume:   0.5,

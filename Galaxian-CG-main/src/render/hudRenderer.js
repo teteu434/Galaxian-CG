@@ -1,16 +1,14 @@
 // ═══════════════════════════════════════════════════════════════
 // src/render/hudRenderer.js
-// HUD renderizado em Canvas 2D sobre o canvas WebGL.
 //
-// CORREÇÕES APLICADAS:
-//   - Posições Y dos botões de upload corrigidas (eram ~10px acima da renderização)
-//   - Posições Y dos botões de remapeamento corrigidas (eram ~20px acima)
-//   - Overlay de remapeamento agora fica dentro do painel de opções
-//   - Troca de abas corrigida (setTab exposto publicamente)
-//   - Tela de vitória só mostra "NOVO RECORDE!" quando de fato bateu o recorde
-//   - Tela de game over / vitória com botões centralizados e pontuação clara
-//   - renderGameplayTab e renderSoundTab leem sempre de SettingsSystem.getAll()
-//     (antes usavam DEFAULT_SETTINGS como fallback, ignorando remapeamentos)
+// MUDANÇAS NESTA VERSÃO:
+//   - renderGameplayTab(): adicionado botão "Controle por Teclado"
+//     e bloco de feedback visual (modo ativo) antes dos remaps.
+//     Coordenadas Y ajustadas para acomodar o novo conteúdo.
+//   - getButtonUnderMouse(): adicionada hit area para 'keyboardControl'
+//   - clickCallbacks: adicionada entrada 'keyboardControl'
+//   - API pública: adicionados isPopupOpen() e isOptionsOpen()
+//     usados por game.js para bloquear Enter durante popups (fix bug).
 // ═══════════════════════════════════════════════════════════════
 "use strict";
 
@@ -20,12 +18,11 @@ const HUD = (() => {
   let score    = 0;
   let lives    = 3;
   let highScore = 0;
-  let newRecord = false; // flag de novo recorde na partida atual
+  let newRecord = false;
 
-  // Estado dos popups
-  let showingPopup  = null;   // 'credits'
+  let showingPopup  = null;
   let optionsActive = false;
-  let optionsTab    = 'gameplay'; // 'gameplay' | 'sound'
+  let optionsTab    = 'gameplay';
   let remappingAction = null;
 
   // ─── Botões do menu principal ───────────────────────────────
@@ -35,26 +32,29 @@ const HUD = (() => {
     { id: 'credits', x: CANVAS_W/2 - 100, y: 420, w: 200, h: 50, text: 'ℹ CRÉDITOS', color: '#0ff' }
   ];
 
-  // ─── Botões do tutorial ──────────────────────────────────────
   const tutorialButton     = { id: 'start', x: CANVAS_W/2 - 100, y: 520, w: 200, h: 50, text: '🚀 INICIAR JOGO',      color: '#0f0' };
   const skipTutorialButton = { id: 'skip',  x: CANVAS_W/2 -  80, y: 580, w: 160, h: 35, text: 'Pular (já sei jogar)', color: '#888' };
 
-  // ─── Botões pós-jogo ─────────────────────────────────────────
   const postGameButtons = {
     restart: { id: 'restart', x: CANVAS_W/2 - 115, y: CANVAS_H/2 + 75, w: 105, h: 42, text: 'REINICIAR', color: '#0f0' },
     menu:    { id: 'menu',    x: CANVAS_W/2 +  10, y: CANVAS_H/2 + 75, w: 105, h: 42, text: 'MENU',      color: '#0ff' }
   };
 
   // ─── Botões do menu de opções ────────────────────────────────
+  // NOVO: adicionado keyboardControl logo abaixo de mouseControl.
+  // Coordenadas Y do restante da aba foram deslocadas +50 para acomodar.
   const optionsButtons = {
-    close:         { id: 'close_options', x: CANVAS_W - 45, y: 10,  w: 35,  h: 35, text: '✕',             color: '#f00' },
-    tabGameplay:   { id: 'tabGameplay',   x: 80,            y: 60,  w: 150, h: 35, text: 'JOGABILIDADE',   color: '#0f0' },
-    tabSound:      { id: 'tabSound',      x: 250,           y: 60,  w: 150, h: 35, text: 'SOM',            color: '#0ff' },
-    mouseControl:  { id: 'mouseControl',  x: 280,           y: 110, w: 100, h: 30, text: '',               color: '#ff0', type: 'toggle' },
-    resetControls: { id: 'resetControls', x: CANVAS_W/2 - 100, y: 330, w: 200, h: 35, text: 'Resetar Controles', color: '#ff0' }
+    close:           { id: 'close_options',   x: CANVAS_W - 45,    y: 10,  w: 35,  h: 35, text: '✕',                color: '#f00' },
+    tabGameplay:     { id: 'tabGameplay',      x: 80,               y: 60,  w: 150, h: 35, text: 'JOGABILIDADE',      color: '#0f0' },
+    tabSound:        { id: 'tabSound',         x: 250,              y: 60,  w: 150, h: 35, text: 'SOM',               color: '#0ff' },
+    // Botão mouse: mesma posição de antes
+    mouseControl:    { id: 'mouseControl',     x: 280,              y: 110, w: 100, h: 30, text: '',                  color: '#ff0', type: 'toggle' },
+    // NOVO: botão teclado, logo abaixo do mouse
+    keyboardControl: { id: 'keyboardControl',  x: 280,              y: 150, w: 100, h: 30, text: '',                  color: '#ff0', type: 'toggle' },
+    // resetControls deslocado +50 (era 330, agora 430) para dar espaço ao bloco de feedback
+    resetControls:   { id: 'resetControls',    x: CANVAS_W/2 - 100, y: 430, w: 200, h: 35, text: 'Resetar Controles', color: '#ff0' }
   };
 
-  // ─── Botões de remapeamento (posição calculada no render) ────
   const remapButtons = {
     keyLeft:  { id: 'remapLeft',  w: 180, h: 30, text: '', color: '#0ff' },
     keyRight: { id: 'remapRight', w: 180, h: 30, text: '', color: '#0ff' },
@@ -63,14 +63,15 @@ const HUD = (() => {
 
   let hoveredButton = null;
 
-  // Callbacks (preenchidos por game.js)
   let clickCallbacks = {
     play: null, options: null, credits: null,
     start: null, skip: null,
     restart: null, menu: null,
     close_popup: null, close_options: null,
     tabGameplay: null, tabSound: null,
-    mouseControl: null, resetControls: null,
+    mouseControl: null,
+    keyboardControl: null,  // NOVO
+    resetControls: null,
     remapLeft: null, remapRight: null, remapShoot: null,
     uploadShoot: null, uploadEnemyShoot: null, uploadExplosion: null,
     uploadDamage: null, uploadGameOver: null, uploadMusic: null
@@ -78,9 +79,7 @@ const HUD = (() => {
 
   // ──────────────── HELPERS ────────────────────────────────────
 
-  function clear() {
-    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-  }
+  function clear() { ctx.clearRect(0, 0, CANVAS_W, CANVAS_H); }
 
   function drawText(text, x, y, size, color, align = 'center') {
     ctx.font      = `bold ${size}px "Courier New", monospace`;
@@ -127,70 +126,121 @@ const HUD = (() => {
   }
 
   // ──────────────── ABA JOGABILIDADE ───────────────────────────
-  // ⚠️  CORREÇÃO: lê SettingsSystem.getAll() diretamente.
-  //     Antes usava DEFAULT_SETTINGS como fallback, ignorando
-  //     qualquer remapeamento feito pelo usuário em runtime.
   //
-  // Posições Y calculadas e documentadas:
+  // Mapa de posições Y (nova disposição com botão teclado e feedback):
   //  y=110 : botão mouseControl
-  //  y=160 : título remapeamento  (y+=50)
-  //  y=190 : botão remapLeft      (y+=30)
-  //  y=235 : botão remapRight     (y+=45)
-  //  y=280 : botão remapShoot     (y+=45)
-  //  y=330 : botão resetControls  (y+=50)
-  // ─────────────────────────────────────────────────────────────
+  //  y=150 : botão keyboardControl  ← NOVO
+  //  y=200 : bloco de feedback visual (modo ativo, 3 linhas ~60px)  ← NOVO
+  //  y=270 : título "MAPEAMENTO DE TECLAS"
+  //  y=300 : botão remapLeft
+  //  y=345 : botão remapRight
+  //  y=390 : botão remapShoot
+  //  y=430 : botão resetControls
+  //
   function renderGameplayTab() {
-    // ← CORRIGIDO: sempre lê o estado atual de NEW_SETTINGS
     const settings = SettingsSystem.getAll();
     let y = 110;
 
-    // Controle por mouse
+    // ── Botão: Controle por Mouse ──────────────────────────────
     ctx.font      = '14px "Courier New", monospace';
     ctx.fillStyle = '#0ff';
     ctx.textAlign = 'left';
-    ctx.fillText('Controle por Mouse:', 100, y + 10);
-    const mouseBtn = { ...optionsButtons.mouseControl, y, text: settings.mouseControl ? 'ON' : 'OFF' };
+    ctx.fillText('Controle por Mouse:', 100, y + 20);
+    const mouseBtn = {
+      ...optionsButtons.mouseControl,
+      y,
+      text: settings.mouseControl ? 'ON' : 'OFF',
+      // Verde quando ativo, cinza quando inativo — feedback visual imediato
+      color: settings.mouseControl ? '#0f0' : '#888'
+    };
     drawButton(mouseBtn, hoveredButton === 'mouseControl');
-    y += 50;
+    y += 50; 
 
-    // Título remapeamento
+    // ── NOVO: Botão: Controle por Teclado ─────────────────────
+    // Posicionado logo abaixo do mouse, mesma lógica de exclusividade.
+    ctx.fillStyle = '#0ff';
+    ctx.font      = '14px "Courier New", monospace';
+    ctx.fillText('Controle por Teclado:', 170, y + 20);
+    const keyboardBtn = {
+      ...optionsButtons.keyboardControl,
+      y,
+      text: settings.keyboardControl ? 'ON' : 'OFF',
+      color: settings.keyboardControl ? '#0f0' : '#888'
+    };
+    drawButton(keyboardBtn, hoveredButton === 'keyboardControl');
+    y += 50; 
+
+    // ── NOVO: Bloco de feedback visual (modo ativo) ────────────
+    // Informa ao jogador quais controles estão em efeito agora.
+    // Usa fonte menor para não ocupar muito espaço vertical.
+    ctx.font      = '12px "Courier New", monospace';
+
+    if (settings.mouseControl) {
+      // Modo mouse ativo
+      ctx.fillStyle = '#0f0';
+      ctx.fillText('▶ Modo Mouse Ativo:', 225, y + 12);
+      ctx.fillStyle = '#aaa';
+      ctx.fillText('  • Movimento: siga a posição do mouse', 225, y + 28);
+      ctx.fillText('  • Tiro: clique esquerdo ou direito',   225, y + 44);
+    } else {
+      // Modo teclado ativo
+      const leftKeys  = (settings.keyLeft  || []).map(k => k.replace('Arrow','').replace('Key','')).join('/');
+      const rightKeys = (settings.keyRight || []).map(k => k.replace('Arrow','').replace('Key','')).join('/');
+      const shootKeys = (settings.keyShoot || []).map(k => k.replace('Key','').replace('Space','ESPAÇO')).join('/');
+
+      ctx.fillStyle = '#0f0';
+      ctx.fillText('▶ Modo Teclado Ativo:', 225, y + 12);
+      ctx.fillStyle = '#aaa';
+      ctx.fillText(`  • Movimento: [ ${leftKeys} ] / [ ${rightKeys} ]`, 225, y + 28);
+      ctx.fillText(`  • Tiro: [ ${shootKeys} ]`,                         225, y + 44);
+    }
+    y += 75; 
+
+    // ── Título remapeamento ────────────────────────────────────
+    ctx.font      = '14px "Courier New", monospace';
     ctx.fillStyle = '#ff0';
-    ctx.fillText('REMAPEAMENTO DE TECLAS', 100, y + 5);
+    ctx.fillText('REMAPEAMENTO DE TECLAS', 225, y + 10);
     ctx.fillStyle = '#0ff';
     y += 30;
 
-    // Mover Esquerda  (y=190)
-    ctx.fillText('Mover Esquerda:', 100, y + 10);
-    const leftKeys = (settings.keyLeft || ['ArrowLeft', 'KeyA']).map(k => k.replace('Arrow', '').replace('Key', '')).join(' / ');
-    const leftBtn  = { ...remapButtons.keyLeft, x: 260, y, text: leftKeys };
-    drawButton(leftBtn, hoveredButton === 'remapLeft');
-    y += 45;
+    // ── Botões de remapeamento ─────────────────────────────────
+    // Desabilitados visualmente quando mouseControl está ativo,
+    // pois remapear não faz sentido nesse modo.
+    const remapColor = settings.mouseControl ? '#444' : '#0ff';
 
-    // Mover Direita  (y=235)
-    ctx.fillText('Mover Direita:', 100, y + 10);
-    const rightKeys = (settings.keyRight || ['ArrowRight', 'KeyD']).map(k => k.replace('Arrow', '').replace('Key', '')).join(' / ');
-    const rightBtn  = { ...remapButtons.keyRight, x: 260, y, text: rightKeys };
-    drawButton(rightBtn, hoveredButton === 'remapRight');
-    y += 45;
+    ctx.fillText('Mover Esquerda:', 100, y + 20);
+    const leftKeys  = (settings.keyLeft  || ['ArrowLeft','KeyA']).map(k => k.replace('Arrow','').replace('Key','')).join(' / ');
+    remapButtons.keyLeft.x     = 260;
+    remapButtons.keyLeft.y     = y;
+    remapButtons.keyLeft.text  = leftKeys;
+    remapButtons.keyLeft.color = remapColor;
 
-    // Atirar  (y=280)
-    ctx.fillText('Atirar:', 100, y + 10);
-    const shootKeys = (settings.keyShoot || ['Space']).map(k => k.replace('Key', '')).join(' / ');
-    const shootBtn  = { ...remapButtons.keyShoot, x: 260, y, text: shootKeys };
-    drawButton(shootBtn, hoveredButton === 'remapShoot');
-    y += 50;
+    drawButton(remapButtons.keyLeft, !settings.mouseControl && hoveredButton === 'remapLeft');
+    y += 45; // 
 
-    // Resetar  (y=330)
+    ctx.fillText('Mover Direita:', 100, y + 20);
+    const rightKeys = (settings.keyRight || ['ArrowRight','KeyD']).map(k => k.replace('Arrow','').replace('Key','')).join(' / ');
+    const rightBtn  = { ...remapButtons.keyRight, x: 260, y, text: rightKeys, color: remapColor };
+    drawButton(rightBtn, !settings.mouseControl && hoveredButton === 'remapRight');
+    y += 45; // 
+
+    ctx.fillText('Atirar:', 100, y + 20);
+    const shootKeys = (settings.keyShoot || ['Space']).map(k => k.replace('Key','')).join(' / ');
+    const shootBtn  = { ...remapButtons.keyShoot, x: 260, y, text: shootKeys, color: remapColor };
+    drawButton(shootBtn, !settings.mouseControl && hoveredButton === 'remapShoot');
+    y += 55; // 
+
+    // ── Botão resetar ──────────────────────────────────────────
     const resetBtn = { ...optionsButtons.resetControls, y };
     drawButton(resetBtn, hoveredButton === 'resetControls');
 
-    // Overlay de remapeamento: DENTRO do painel, não fullscreen ────
+    // ── Overlay de remapeamento ────────────────────────────────
     if (remappingAction) {
       const bw = 320, bh = 150;
       const bx = CANVAS_W / 2 - bw / 2;
       const by = CANVAS_H / 2 - bh / 2;
 
-      ctx.fillStyle = 'rgba(0,0,30,0.97)';
+      ctx.fillStyle   = 'rgba(0,0,30,0.97)';
       ctx.fillRect(bx, by, bw, bh);
       ctx.strokeStyle = '#ff0';
       ctx.lineWidth   = 2;
@@ -205,18 +255,8 @@ const HUD = (() => {
   }
 
   // ──────────────── ABA SOM ────────────────────────────────────
-  // ⚠️  CORREÇÃO: mesma razão — lê SettingsSystem.getAll().
-  //
-  // Posições Y calculadas e documentadas:
-  //  y=100 : slider masterVolume  → renderSlider(100, 108, 260, ...)
-  //  y=150 : slider musicVolume   → renderSlider(100, 158, 260, ...)
-  //  y=200 : slider sfxVolume     → renderSlider(100, 208, 260, ...)
-  //  y=255 : título "ÁUDIO PERSONALIZADO"  (y+=55)
-  //  y=280 : início dos botões de upload   (y+=25)
-  //    280, 322, 364, 406, 448, 490        (cada +42)
-  // ─────────────────────────────────────────────────────────────
+  // (sem alterações — mantida idêntica ao original)
   function renderSoundTab() {
-    // ← CORRIGIDO: sempre lê o estado atual de NEW_SETTINGS
     const settings     = SettingsSystem.getAll();
     const customSounds = window.AudioSystem ? AudioSystem.getCustomSounds() : {};
     let y = 100;
@@ -225,28 +265,24 @@ const HUD = (() => {
     ctx.fillStyle = '#0ff';
     ctx.textAlign = 'left';
 
-    // Volume Geral (slider em y+8 = 108)
     ctx.fillText('Volume Geral:', 100, y + 5);
     renderSlider(100, y + 8, 260, settings.masterVolume || 0.7);
     ctx.fillText(`${Math.round((settings.masterVolume || 0.7) * 100)}%`, 375, y + 14);
     y += 50;
 
-    // Música (slider em 158)
     ctx.fillText('Volume da Música:', 100, y + 5);
     renderSlider(100, y + 8, 260, settings.musicVolume || 0.5);
     ctx.fillText(`${Math.round((settings.musicVolume || 0.5) * 100)}%`, 375, y + 14);
     y += 50;
 
-    // SFX (slider em 208)
     ctx.fillText('Volume dos Efeitos:', 100, y + 5);
     renderSlider(100, y + 8, 260, settings.sfxVolume || 0.8);
     ctx.fillText(`${Math.round((settings.sfxVolume || 0.8) * 100)}%`, 375, y + 14);
     y += 55;
 
-    // Título uploads (y=255)
     ctx.fillStyle = '#ff0';
     ctx.fillText('ÁUDIO PERSONALIZADO', 100, y + 5);
-    y += 25; // y=280
+    y += 25;
 
     const uploadList = [
       { id: 'uploadShoot',      text: '🔫 Tiro do Jogador', soundKey: 'playerShoot'     },
@@ -260,7 +296,6 @@ const HUD = (() => {
     for (const item of uploadList) {
       const btn = { id: item.id, x: 100, y, w: 280, h: 32, text: item.text, color: '#0ff' };
       drawButton(btn, hoveredButton === item.id);
-
       if (customSounds[item.soundKey]) {
         ctx.fillStyle = '#0f0';
         ctx.font      = '11px "Courier New", monospace';
@@ -274,43 +309,33 @@ const HUD = (() => {
   // ──────────────── MENU DE OPÇÕES ─────────────────────────────
   function renderOptionsMenu() {
     if (!optionsActive) return;
-
     ctx.fillStyle = 'rgba(0,0,0,0.95)';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-
     drawShadowText('⚙ OPÇÕES', CANVAS_W / 2, 35, 28, '#ff0');
-
     drawButton({ ...optionsButtons.close }, hoveredButton === 'close_options');
 
     const isGameplay = optionsTab === 'gameplay';
-    drawButton({ ...optionsButtons.tabGameplay, color: isGameplay ? '#0f0' : '#888' }, hoveredButton === 'tabGameplay');
+    drawButton({ ...optionsButtons.tabGameplay, color: isGameplay  ? '#0f0' : '#888' }, hoveredButton === 'tabGameplay');
     drawButton({ ...optionsButtons.tabSound,    color: !isGameplay ? '#0f0' : '#888' }, hoveredButton === 'tabSound');
 
-    if (isGameplay) {
-      renderGameplayTab();
-    } else {
-      renderSoundTab();
-    }
+    if (isGameplay) renderGameplayTab();
+    else            renderSoundTab();
   }
 
   // ──────────────── MENU PRINCIPAL ─────────────────────────────
   function renderMenu() {
     ctx.fillStyle = 'rgba(0,0,0,0.85)';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-
     drawShadowText('⚡ GALAXIAN WebGL ⚡', CANVAS_W / 2, 120, 36, '#ff0', '#00f');
     drawText('O Clássico Arcade', CANVAS_W / 2, 165, 16, '#0ff');
     drawText(`🏆 HIGH SCORE: ${highScore}`, CANVAS_W / 2, 210, 14, '#ff0');
-
     ctx.strokeStyle = '#0ff';
     ctx.lineWidth   = 2;
     ctx.beginPath();
     ctx.moveTo(80, 235);
     ctx.lineTo(CANVAS_W - 80, 235);
     ctx.stroke();
-
     for (const btn of menuButtons) drawButton(btn, hoveredButton === btn.id);
-
     drawText('Use o MOUSE para navegar', CANVAS_W / 2, CANVAS_H - 50, 12, '#888');
     drawText('versão 2.0', CANVAS_W - 60, CANVAS_H - 20, 10, '#555', 'right');
   }
@@ -319,13 +344,10 @@ const HUD = (() => {
   function renderTutorial() {
     ctx.fillStyle = 'rgba(0,0,0,0.92)';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-
     drawShadowText('📖 TUTORIAL', CANVAS_W / 2, 70, 32, '#ff0');
-
     ctx.font      = '15px "Courier New", monospace';
     ctx.fillStyle = '#0ff';
     ctx.textAlign = 'left';
-
     const instructions = [
       '🎮 CONTROLES:','',
       '• ← →  ou  A D  →  Movimentar nave',
@@ -335,7 +357,6 @@ const HUD = (() => {
       '🎯 OBJETIVO:','Destrua todos os inimigos!','',
       '⭐ DICA:','Use o mouse para mirar!'
     ];
-
     let y = 130;
     for (const line of instructions) {
       if (line === '') { y += 12; continue; }
@@ -343,7 +364,6 @@ const HUD = (() => {
       ctx.fillText(line, 60, y);
       y += 28;
     }
-
     drawButton(tutorialButton, hoveredButton === 'start');
     if (localStorage.getItem(TUTORIAL_COMPLETED_KEY) === 'true') {
       drawButton(skipTutorialButton, hoveredButton === 'skip');
@@ -355,7 +375,6 @@ const HUD = (() => {
     score = kills * 100;
     drawText(`PONTOS: ${score}`, 16, 22, 14, '#0ff', 'left');
     drawText(`🏆 RECORDE: ${highScore}`, 16, 42, 12, '#ff0', 'left');
-
     const heartX = CANVAS_W - 100;
     for (let i = 0; i < lives; i++) drawHeart(heartX + i * 25, 15);
   }
@@ -366,13 +385,14 @@ const HUD = (() => {
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
     drawShadowText('⏸  PAUSADO', CANVAS_W / 2, CANVAS_H / 2 - 16, 32, '#ffff00');
     drawText('Pressione P ou ESC para continuar', CANVAS_W / 2, CANVAS_H / 2 + 24, 13, 'rgba(255,255,255,0.6)');
+    drawButton(postGameButtons.restart, hoveredButton === 'restart');
+    drawButton(postGameButtons.menu,    hoveredButton === 'menu');
   }
 
   // ──────────────── CRÉDITOS ───────────────────────────────────
   function renderCreditsPopup() {
     ctx.fillStyle = 'rgba(0,0,0,0.95)';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-
     drawShadowText('🌟 CRÉDITOS 🌟', CANVAS_W / 2, 150, 28, '#ff0');
     ctx.font      = '14px "Courier New", monospace';
     ctx.fillStyle = '#0ff';
@@ -387,42 +407,28 @@ const HUD = (() => {
   // ──────────────── GAME OVER ──────────────────────────────────
   function renderGameOverOverlay(kills) {
     score = kills * 100;
-
     ctx.fillStyle = 'rgba(0,0,0,0.75)';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-
     drawShadowText('GAME OVER', CANVAS_W / 2, CANVAS_H / 2 - 60, 42, '#ff1744');
     drawText(`PONTOS FINAIS: ${score}`, CANVAS_W / 2, CANVAS_H / 2 - 10, 20, '#fff');
     drawText(`🏆 RECORDE: ${highScore}`,  CANVAS_W / 2, CANVAS_H / 2 + 25, 15, '#ff0');
-
-    if (newRecord) {
-      drawShadowText('✨ NOVO RECORDE! ✨', CANVAS_W / 2, CANVAS_H / 2 + 55, 16, '#ff0');
-    }
-
+    if (newRecord) drawShadowText('✨ NOVO RECORDE! ✨', CANVAS_W / 2, CANVAS_H / 2 + 55, 16, '#ff0');
     drawButton(postGameButtons.restart, hoveredButton === 'restart');
     drawButton(postGameButtons.menu,    hoveredButton === 'menu');
-
     drawText('ou pressione R para reiniciar', CANVAS_W / 2, CANVAS_H / 2 + 130, 12, '#555');
   }
 
   // ──────────────── VITÓRIA ────────────────────────────────────
   function renderWinOverlay(kills) {
     score = kills * 100;
-
     ctx.fillStyle = 'rgba(0,0,40,0.80)';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-
     drawShadowText('VOCÊ VENCEU! 🏅', CANVAS_W / 2, CANVAS_H / 2 - 60, 38, '#00e676');
     drawText(`PONTOS: ${score}`,       CANVAS_W / 2, CANVAS_H / 2 - 10, 20, '#fff');
     drawText(`🏆 RECORDE: ${highScore}`, CANVAS_W / 2, CANVAS_H / 2 + 25, 15, '#ff0');
-
-    if (newRecord) {
-      drawShadowText('✨ NOVO RECORDE! ✨', CANVAS_W / 2, CANVAS_H / 2 + 55, 16, '#ff0');
-    }
-
+    if (newRecord) drawShadowText('✨ NOVO RECORDE! ✨', CANVAS_W / 2, CANVAS_H / 2 + 55, 16, '#ff0');
     drawButton(postGameButtons.restart, hoveredButton === 'restart');
     drawButton(postGameButtons.menu,    hoveredButton === 'menu');
-
     drawText('ou pressione R para reiniciar', CANVAS_W / 2, CANVAS_H / 2 + 130, 12, '#555');
   }
 
@@ -431,7 +437,6 @@ const HUD = (() => {
     renderGameHUD(kills);
     ctx.fillStyle = 'rgba(0,0,0,0.72)';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-
     ctx.fillStyle   = '#000122';
     ctx.strokeStyle = '#0ff';
     ctx.lineWidth   = 2;
@@ -440,7 +445,6 @@ const HUD = (() => {
     else               ctx.rect(CANVAS_W / 2 - 160, CANVAS_H / 2 - 70, 320, 140);
     ctx.fill();
     ctx.stroke();
-
     drawShadowText('Deseja reiniciar?', CANVAS_W / 2, CANVAS_H / 2 - 28, 24, '#fff');
     drawText('[ ENTER ] Sim     [ ESC ] Não', CANVAS_W / 2, CANVAS_H / 2 + 14, 15, '#0ff');
   }
@@ -450,10 +454,8 @@ const HUD = (() => {
     lives     = currentLives;
     highScore = currentHighScore;
     clear();
-
     if (optionsActive)              { renderOptionsMenu();  return; }
     if (showingPopup === 'credits') { renderCreditsPopup(); return; }
-
     switch (state) {
       case STATE_MENU:     renderMenu();                               break;
       case STATE_TUTORIAL: renderTutorial();                           break;
@@ -467,7 +469,6 @@ const HUD = (() => {
 
   // ──────────────── DETECÇÃO DE HOVER / CLIQUE ─────────────────
   function getButtonUnderMouse(mx, my) {
-    // ── Menu de opções ──────────────────────────────────────────
     if (optionsActive) {
       const c = optionsButtons.close;
       if (mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h) return 'close_options';
@@ -478,19 +479,27 @@ const HUD = (() => {
       if (mx >= ts.x && mx <= ts.x + ts.w && my >= ts.y && my <= ts.y + ts.h) return 'tabSound';
 
       if (optionsTab === 'gameplay') {
+        // Mouse control (y=110..140)
         if (mx >= 280 && mx <= 380 && my >= 110 && my <= 140) return 'mouseControl';
-        if (mx >= 260 && mx <= 440 && my >= 190 && my <= 220) return 'remapLeft';
-        if (mx >= 260 && mx <= 440 && my >= 235 && my <= 265) return 'remapRight';
-        if (mx >= 260 && mx <= 440 && my >= 280 && my <= 310) return 'remapShoot';
-        if (mx >= CANVAS_W/2 - 100 && mx <= CANVAS_W/2 + 100 && my >= 330 && my <= 365) return 'resetControls';
+        // NOVO: Keyboard control (y=150..180)
+        if (mx >= 280 && mx <= 380 && my >= 150 && my <= 180) return 'keyboardControl';
 
-      } else { // sound
+        // Remap buttons: desabilitados quando mouseControl ativo
+        if (!SettingsSystem.get('mouseControl')) {
+          // y ajustados: remapLeft=300, remapRight=345, remapShoot=390
+          if (mx >= 260 && mx <= 440 && my >= 300 && my <= 330) return 'remapLeft';
+          if (mx >= 260 && mx <= 440 && my >= 345 && my <= 375) return 'remapRight';
+          if (mx >= 260 && mx <= 440 && my >= 390 && my <= 420) return 'remapShoot';
+        }
+        // resetControls: y=430
+        if (mx >= CANVAS_W/2 - 100 && mx <= CANVAS_W/2 + 100 && my >= 430 && my <= 465) return 'resetControls';
+
+      } else {
         if (mx >= 95 && mx <= 370) {
           if (my >= 100 && my <= 125) return 'slider_masterVolume';
           if (my >= 150 && my <= 175) return 'slider_musicVolume';
           if (my >= 200 && my <= 225) return 'slider_sfxVolume';
         }
-
         const uploadYPositions = [280, 322, 364, 406, 448, 490];
         const uploadIds        = ['uploadShoot', 'uploadEnemyShoot', 'uploadExplosion',
                                   'uploadDamage', 'uploadGameOver', 'uploadMusic'];
@@ -503,17 +512,14 @@ const HUD = (() => {
       return null;
     }
 
-    // ── Créditos ────────────────────────────────────────────────
     if (showingPopup === 'credits') return 'close_popup';
 
-    // ── Menu principal ──────────────────────────────────────────
     if (GameState.is(STATE_MENU)) {
       for (const btn of menuButtons) {
         if (mx >= btn.x && mx <= btn.x + btn.w && my >= btn.y && my <= btn.y + btn.h) return btn.id;
       }
     }
 
-    // ── Tutorial ─────────────────────────────────────────────────
     if (GameState.is(STATE_TUTORIAL)) {
       if (mx >= tutorialButton.x && mx <= tutorialButton.x + tutorialButton.w &&
           my >= tutorialButton.y && my <= tutorialButton.y + tutorialButton.h) return 'start';
@@ -522,8 +528,7 @@ const HUD = (() => {
           my >= skipTutorialButton.y && my <= skipTutorialButton.y + skipTutorialButton.h) return 'skip';
     }
 
-    // ── Game Over / Win ──────────────────────────────────────────
-    if (GameState.is(STATE_GAMEOVER) || GameState.is(STATE_WIN)) {
+    if (GameState.is(STATE_GAMEOVER) || GameState.is(STATE_WIN) || GameState.is(STATE_PAUSED) || GameState.is(STATE_CONFIRM)) {
       const r = postGameButtons.restart;
       if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) return 'restart';
       const m = postGameButtons.menu;
@@ -543,24 +548,16 @@ const HUD = (() => {
 
   function handleClick(mx, my, callbacks) {
     Object.assign(clickCallbacks, callbacks);
-
     if (showingPopup === 'credits') { showingPopup = null; return true; }
-
     if (optionsActive && optionsTab === 'sound' && mx >= 95 && mx <= 370) {
       if (my >= 100 && my <= 125) return handleSliderClick(mx, 'slider_masterVolume');
       if (my >= 150 && my <= 175) return handleSliderClick(mx, 'slider_musicVolume');
       if (my >= 200 && my <= 225) return handleSliderClick(mx, 'slider_sfxVolume');
     }
-
     const buttonId = getButtonUnderMouse(mx, my);
     if (!buttonId) return false;
-
     if (buttonId.startsWith('slider_')) return handleSliderClick(mx, buttonId);
-
-    if (clickCallbacks[buttonId]) {
-      clickCallbacks[buttonId]();
-      return true;
-    }
+    if (clickCallbacks[buttonId]) { clickCallbacks[buttonId](); return true; }
     return false;
   }
 
@@ -584,6 +581,11 @@ const HUD = (() => {
   function isRemapping()          { return remappingAction !== null; }
   function getRemappingAction()   { return remappingAction; }
 
+  // ── NOVO: funções de estado para game.js (fix do bug do Enter) ─
+  // game.js verifica esses dois antes de processar Enter no menu.
+  function isPopupOpen()   { return showingPopup !== null; }
+  function isOptionsOpen() { return optionsActive; }
+
   return {
     render, handleClick, updateHover,
     setLives, setHighScore, setNewRecord, setTab,
@@ -591,6 +593,8 @@ const HUD = (() => {
     showPopup, closePopup,
     startRemapping, cancelRemapping,
     isRemapping, getRemappingAction,
+    // NOVO: expostos para game.js
+    isPopupOpen, isOptionsOpen,
     get score()     { return score;     },
     get highScore() { return highScore; }
   };

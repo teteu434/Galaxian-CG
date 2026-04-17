@@ -30,6 +30,15 @@ const SettingsSystem = (() => {
   // ── Escrita genérica (volumes, booleans, etc.) ───────────────
   function set(key, value) {
     NEW_SETTINGS[key] = value;
+
+  if (key === 'mouseControl' && value === true) {
+    NEW_SETTINGS.keyboardControl = false;
+  }
+
+  if (key === 'keyboardControl' && value === true) {
+    NEW_SETTINGS.mouseControl = false;
+  }
+
     save();
   }
 
@@ -75,6 +84,7 @@ const SettingsSystem = (() => {
   function save() {
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(NEW_SETTINGS));
+      localStorage.setItem('galaxian_highscore', 0);
     } catch (e) {
       console.error('SettingsSystem: falha ao salvar no localStorage', e);
     }
@@ -113,4 +123,4 @@ const SettingsSystem = (() => {
   }
 
   return { get, getAll, set, setKeyMapping, reset, save, load };
-})();s
+})();

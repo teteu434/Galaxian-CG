@@ -4,6 +4,8 @@
 // ═══════════════════════════════════════════════════════════════
 "use strict";
 
+"use strict";
+
 const ShootingSystem = (() => {
   let cooldown = 0;
 
@@ -11,13 +13,25 @@ const ShootingSystem = (() => {
     if (cooldown > 0) cooldown -= dt;
 
     const keyShoot = SettingsSystem.get('keyShoot') || ['Space'];
-    if (Input.wasPressedAny(keyShoot) && cooldown <= 0 && Player.alive) {
-      Bullet.fire(Player.cx, Player.cy);
-      cooldown = 0.15;
+
+    if (Input.wasPressedAny(keyShoot)) {
+      tryShoot(); 
     }
   }
 
-  function reset() { cooldown = 0; }
+  function tryShoot() {
+    if (cooldown > 0) return false;
+    if (!Player.alive) return false;
 
-  return { update, reset };
+    Bullet.fire(Player.cx, Player.cy);
+    cooldown = 0.15;
+
+    return true;
+  }
+
+  function reset() {
+    cooldown = 0;
+  }
+
+  return {update, reset, tryShoot};
 })();

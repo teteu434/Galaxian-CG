@@ -1,9 +1,15 @@
 // ═══════════════════════════════════════════════════════════════
 // src/core/game.js
-// Mudanças:
-//   - resetControls usa SettingsSystem.reset() (não mais manual)
-//   - start() remove fallback direto a DEFAULT_SETTINGS
-//   - handleStateInputs() lê sempre do SettingsSystem
+//
+// MUDANÇAS:
+//   - setupMouseEvents(): separado em mousemove (posição) e
+//     mousedown (tiro). Click direito agora também atira.
+//     Conversão de coordenadas centralizada em uma função.
+//   - update(): movimento por mouse usa Input.getMouseRawX()
+//     com conversão de escala, em vez de variável local mouseX.
+//   - handleStateInputs(): Enter no menu bloqueado quando HUD
+//     tem popup ou options aberto (fix do bug de créditos).
+//   - Tiro por mouse integrado ao ShootingSystem sem duplicar lógica.
 // ═══════════════════════════════════════════════════════════════
 "use strict";
 
@@ -13,18 +19,50 @@ const Game = (() => {
   let rafId     = 0;
   let lives     = 3;
 
-  let highScore = parseInt(localStorage.getItem('galaxian_highscore') || '0');
+  let highScore = (() => {
+    try {
+      const stored = localStorage.getItem('galaxian_highscore');
+      const parsed = stored ? parseInt(stored, 10) : 0;
+      return isNaN(parsed) ? 0 : parsed;
+    } catch (e) {
+      console.warn('[Game] localStorage indisponível:', e);
+      return 0;
+    }
+  })();
+
   let damageCooldown = 0;
   const DAMAGE_COOLDOWN = 1.8;
 
   let hasShownTutorial = localStorage.getItem(TUTORIAL_COMPLETED_KEY) === 'true';
-  let mouseX = CANVAS_W / 2;
-  let mouseY = CANVAS_H / 2;
-  let remappingAction = null;
+  let remappingAction  = null;
 
   const PLAYER_MIN_X = 0;
   const PLAYER_MAX_X = CANVAS_W - PLAYER_W;
 
+  // ── Utilitário: converte coordenadas da janela → canvas ───────
+  // Centralizado aqui para ser reutilizado por mousemove e mousedown.
+  // Necessário porque o canvas pode estar escalado via CSS (fullscreen).
+  function windowToCanvas(clientX, clientY) {
+    const canvas = document.getElementById('glCanvas');
+    const rect   = canvas.getBoundingClientRect();
+    const scaleX = canvas.width  / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top)  * scaleY,
+    };
+  }
+
+  // ── Converte posição bruta do Input para X no canvas ─────────
+  // Chamado a cada frame no update() quando mouseControl = true.
+  function getMouseCanvasX() {
+    const canvas = document.getElementById('glCanvas');
+    const rect   = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    return (Input.getMouseRawX() - rect.left) * scaleX;
+  }
+
+  // ────────────────────────────────────────────────────────────
   function resetAll() {
     kills          = 0;
     lives          = 3;
@@ -52,7 +90,11 @@ const Game = (() => {
   function checkAndSaveHighScore(finalScore) {
     if (finalScore > highScore) {
       highScore = finalScore;
-      localStorage.setItem('galaxian_highscore', highScore);
+      try {
+        localStorage.setItem('galaxian_highscore', String(highScore));
+      } catch (e) {
+        console.error('[Game] Erro ao salvar high score:', e);
+      }
       HUD.setHighScore(highScore);
       HUD.setNewRecord(true);
       return true;
@@ -61,7 +103,7 @@ const Game = (() => {
   }
 
   function gameOver() {
-    GameState.set(STATE_GAMEOVER);
+    setTimeout(() => GameState.set(STATE_GAMEOVER), 600);
     AudioSystem.stopBackgroundMusic();
     AudioSystem.playGameOver();
     checkAndSaveHighScore(kills * 100);
@@ -119,11 +161,15 @@ const Game = (() => {
         tabGameplay: () => { HUD.setTab('gameplay'); },
         tabSound:    () => { HUD.setTab('sound');    },
 
+
         mouseControl: () => {
           SettingsSystem.set('mouseControl', !SettingsSystem.get('mouseControl'));
         },
+        // NOVO: keyboardControl: ativa teclado, desativa mouse
+        keyboardControl: () => {
+          SettingsSystem.set('keyboardControl', !SettingsSystem.get('keyboardControl'));
+        },
 
-        // ⚠️  Reset centralizado via SettingsSystem — não mais manual
         resetControls: () => { SettingsSystem.reset(); },
 
         remapLeft:  () => { remappingAction = 'keyLeft';  HUD.startRemapping('keyLeft');  },
@@ -144,33 +190,53 @@ const Game = (() => {
     const canvas    = document.getElementById('glCanvas');
     const hudCanvas = document.getElementById('hud');
 
-    function updateMousePosition(e) {
-      const rect   = canvas.getBoundingClientRect();
-      const scaleX = canvas.width  / rect.width;
-      const scaleY = canvas.height / rect.height;
-      mouseX = (e.clientX - rect.left) * scaleX;
-      mouseY = (e.clientY - rect.top)  * scaleY;
-      HUD.updateHover(mouseX, mouseY);
+    // ── Hover do HUD (mousemove) ──────────────────────────────
+    // Separado do tiro: mousemove só atualiza o hover do HUD.
+    // O Input já rastreia a posição bruta via seu próprio listener.
+    function onMouseMove(e) {
+      const { x, y } = windowToCanvas(e.clientX, e.clientY);
+      HUD.updateHover(x, y);
     }
 
-    canvas.addEventListener('mousemove',    updateMousePosition);
-    hudCanvas.addEventListener('mousemove', updateMousePosition);
+    canvas.addEventListener('mousemove',    onMouseMove);
+    hudCanvas.addEventListener('mousemove', onMouseMove);
 
-    canvas.addEventListener('click', (e) => {
-      const rect   = canvas.getBoundingClientRect();
-      const scaleX = canvas.width  / rect.width;
-      const scaleY = canvas.height / rect.height;
-      const cx = (e.clientX - rect.left) * scaleX;
-      const cy = (e.clientY - rect.top)  * scaleY;
+    // ── Clique do HUD / Tiro (mousedown) ─────────────────────
+    // Usamos mousedown (não 'click') porque:
+    //   1. Captura botão direito (button=2), que 'click' ignora
+    //   2. Resposta mais imediata para o tiro
+    //   3. Botão direito com preventDefault no 'contextmenu' (input.js)
+    //      impede o menu nativo mas não impede o mousedown
+    function onMouseDown(e) {
+      const { x, y } = windowToCanvas(e.clientX, e.clientY);
 
+      // Em remapping, nenhum clique deve passar para o jogo
       if (remappingAction) return;
 
-      const handled = HUD.handleClick(cx, cy, {});
-      if (!handled && GameState.is(STATE_RUNNING)) {
-        ShootingSystem.shoot();
-        AudioSystem.playPlayerShoot();
+      // Tenta consumir o clique no HUD primeiro.
+      // Se o HUD tratou o clique (retornou true), não atira.
+      const handledByHUD = HUD.handleClick(x, y, {});
+      if (handledByHUD) return;
+
+      // Tiro por mouse: só dispara se mouseControl estiver ativo
+      // e o jogo estiver rodando. Botão esquerdo (0) ou direito (2).
+      if (
+        GameState.is(STATE_RUNNING) &&
+        SettingsSystem.get('mouseControl') &&
+        (e.button === 0 || e.button === 2)
+      ) {
+        // Reutiliza ShootingSystem — sem duplicar lógica de cooldown
+        const fired = ShootingSystem.tryShoot();
+        if (fired) AudioSystem.playPlayerShoot();
       }
-    });
+    }
+
+    canvas.addEventListener('mousedown',    onMouseDown);
+    hudCanvas.addEventListener('mousedown', onMouseDown);
+
+    // Mantém o 'click' apenas para compatibilidade com teclado ativo
+    // (modo teclado usa click para atirar via HUD, se aplicável)
+    // Removido: o mousedown já cobre tudo. Não duplicar.
   }
 
   function setupKeyboardRemapping() {
@@ -179,26 +245,24 @@ const Game = (() => {
       e.preventDefault();
 
       if (e.code === 'Escape') {
-        Input.suppress(e.code);   // ← Escape também pode acionar isPausePressed
+        Input.suppress(e.code);
         remappingAction = null;
         HUD.cancelRemapping();
         return;
       }
 
-      // ⚠️  setKeyMapping garante unicidade: remove conflitos automaticamente
       SettingsSystem.setKeyMapping(remappingAction, e.code);
-      Input.suppress(e.code);    // ← remove do buffer ANTES de zerar o guard
+      Input.suppress(e.code);
       remappingAction = null;
       HUD.cancelRemapping();
     });
   }
 
   function handleStateInputs() {
-    const state    = GameState.get();
+    const state = GameState.get();
 
     if (remappingAction) return;
 
-    // Toda leitura de teclas passa pelo SettingsSystem
     const keyLeft    = SettingsSystem.get('keyLeft')    || [];
     const keyRight   = SettingsSystem.get('keyRight')   || [];
     const keyShoot   = SettingsSystem.get('keyShoot')   || ['Space'];
@@ -211,14 +275,28 @@ const Game = (() => {
     const isPausePressed   = Input.wasPressedAny(keyPause);
     const isRestartPressed = Input.wasPressedAny(keyRestart);
 
+    // Movimento por teclado no loop (complementa o player.update())
+    // player.update() já tem o guard de mouseControl, mas aqui
+    // também guardamos para consistência e para evitar duplo movimento.
     if (state === STATE_RUNNING && !SettingsSystem.get('mouseControl')) {
       const dt = 0.016;
       if (isLeftPressed)  Player.setX(Math.max(PLAYER_MIN_X, Math.min(Player.x - PLAYER_SPEED * dt, PLAYER_MAX_X)));
       if (isRightPressed) Player.setX(Math.max(PLAYER_MIN_X, Math.min(Player.x + PLAYER_SPEED * dt, PLAYER_MAX_X)));
     }
 
+    // ── FIX DO BUG: Enter no menu ─────────────────────────────
+    // Antes, Enter iniciava o jogo mesmo com popup/options aberto.
+    // Agora verificamos se o HUD está "ocupado" antes de processar.
+    // HUD.isPopupOpen() e HUD.isOptionsOpen() devem existir no HUD
+    // (veja hudRenderer.js — adicionamos essas funções).
     if (state === STATE_MENU && Input.wasPressed('Enter')) {
-      hasShownTutorial ? startGame() : goToTutorial();
+      const popupOpen   = typeof HUD.isPopupOpen   === 'function' && HUD.isPopupOpen();
+      const optionsOpen = typeof HUD.isOptionsOpen === 'function' && HUD.isOptionsOpen();
+
+      // Só inicia o jogo se nenhuma camada de UI estiver aberta
+      if (!popupOpen && !optionsOpen) {
+        hasShownTutorial ? startGame() : goToTutorial();
+      }
       return;
     }
 
@@ -254,8 +332,25 @@ const Game = (() => {
     const state = GameState.get();
 
     if (state === STATE_RUNNING) {
-      if (SettingsSystem.get('mouseControl') && mouseX >= 0 && mouseX <= CANVAS_W) {
-        Player.setX(Math.max(PLAYER_MIN_X, Math.min(mouseX - PLAYER_W / 2, PLAYER_MAX_X)));
+      // ── Movimento por mouse ───────────────────────────────────
+      // Convertemos a posição bruta do Input para coordenadas do canvas
+      // aqui no update(), a cada frame, garantindo responsividade.
+      if (SettingsSystem.get('mouseControl')) {
+        const canvasX = getMouseCanvasX();
+        // Centraliza o player no cursor (subtrai metade da largura)
+        Player.setX(Math.max(PLAYER_MIN_X, Math.min(canvasX - PLAYER_W / 2, PLAYER_MAX_X)));
+      }
+
+      // ── Tiro por teclado (apenas se mouseControl = false) ────
+      // O tiro por mouse é tratado no mousedown (setupMouseEvents),
+      // não aqui, para evitar processar no update() e no evento
+      // simultaneamente (duplicação de tiros).
+      if (!SettingsSystem.get('mouseControl')) {
+        const keyShoot = SettingsSystem.get('keyShoot') || ['Space'];
+        if (Input.wasPressedAny(keyShoot)) {
+          const fired = ShootingSystem.tryShoot();
+          if (fired) AudioSystem.playPlayerShoot();
+        }
       }
 
       Player.update(dt);
@@ -266,7 +361,9 @@ const Game = (() => {
       if (damageCooldown > 0) damageCooldown -= dt;
 
       const hit = CollisionSystem.check();
+
       if (hit && Player.alive && damageCooldown <= 0) {
+        Player.setHit(true);
         lives--;
         damageCooldown = DAMAGE_COOLDOWN;
         HUD.setLives(lives);
@@ -314,8 +411,6 @@ const Game = (() => {
     resetAll();
     GameState.set(STATE_MENU);
 
-    // ⚠️  SettingsSystem.load() aplica dados salvos sobre NEW_SETTINGS
-    //     Nenhum fallback direto a DEFAULT_SETTINGS aqui.
     SettingsSystem.load();
 
     if (typeof AudioSystem !== 'undefined') {
