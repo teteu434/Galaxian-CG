@@ -9,6 +9,8 @@
 //   - Troca de abas corrigida (setTab exposto publicamente)
 //   - Tela de vitória só mostra "NOVO RECORDE!" quando de fato bateu o recorde
 //   - Tela de game over / vitória com botões centralizados e pontuação clara
+//   - renderGameplayTab e renderSoundTab leem sempre de SettingsSystem.getAll()
+//     (antes usavam DEFAULT_SETTINGS como fallback, ignorando remapeamentos)
 // ═══════════════════════════════════════════════════════════════
 "use strict";
 
@@ -38,7 +40,6 @@ const HUD = (() => {
   const skipTutorialButton = { id: 'skip',  x: CANVAS_W/2 -  80, y: 580, w: 160, h: 35, text: 'Pular (já sei jogar)', color: '#888' };
 
   // ─── Botões pós-jogo ─────────────────────────────────────────
-  // Centralizados um ao lado do outro abaixo da pontuação
   const postGameButtons = {
     restart: { id: 'restart', x: CANVAS_W/2 - 115, y: CANVAS_H/2 + 75, w: 105, h: 42, text: 'REINICIAR', color: '#0f0' },
     menu:    { id: 'menu',    x: CANVAS_W/2 +  10, y: CANVAS_H/2 + 75, w: 105, h: 42, text: 'MENU',      color: '#0ff' }
@@ -126,9 +127,11 @@ const HUD = (() => {
   }
 
   // ──────────────── ABA JOGABILIDADE ───────────────────────────
-  // Posições Y calculadas e documentadas para manter consistência
-  // com getButtonUnderMouse()
+  // ⚠️  CORREÇÃO: lê SettingsSystem.getAll() diretamente.
+  //     Antes usava DEFAULT_SETTINGS como fallback, ignorando
+  //     qualquer remapeamento feito pelo usuário em runtime.
   //
+  // Posições Y calculadas e documentadas:
   //  y=110 : botão mouseControl
   //  y=160 : título remapeamento  (y+=50)
   //  y=190 : botão remapLeft      (y+=30)
@@ -137,7 +140,8 @@ const HUD = (() => {
   //  y=330 : botão resetControls  (y+=50)
   // ─────────────────────────────────────────────────────────────
   function renderGameplayTab() {
-    const settings = window.SettingsSystem ? SettingsSystem.getAll() : DEFAULT_SETTINGS;
+    // ← CORRIGIDO: sempre lê o estado atual de NEW_SETTINGS
+    const settings = SettingsSystem.getAll();
     let y = 110;
 
     // Controle por mouse
@@ -157,21 +161,21 @@ const HUD = (() => {
 
     // Mover Esquerda  (y=190)
     ctx.fillText('Mover Esquerda:', 100, y + 10);
-    const leftKeys = (settings.keyLeft || ['ArrowLeft','KeyA']).map(k => k.replace('Arrow','').replace('Key','')).join(' / ');
+    const leftKeys = (settings.keyLeft || ['ArrowLeft', 'KeyA']).map(k => k.replace('Arrow', '').replace('Key', '')).join(' / ');
     const leftBtn  = { ...remapButtons.keyLeft, x: 260, y, text: leftKeys };
     drawButton(leftBtn, hoveredButton === 'remapLeft');
     y += 45;
 
     // Mover Direita  (y=235)
     ctx.fillText('Mover Direita:', 100, y + 10);
-    const rightKeys = (settings.keyRight || ['ArrowRight','KeyD']).map(k => k.replace('Arrow','').replace('Key','')).join(' / ');
+    const rightKeys = (settings.keyRight || ['ArrowRight', 'KeyD']).map(k => k.replace('Arrow', '').replace('Key', '')).join(' / ');
     const rightBtn  = { ...remapButtons.keyRight, x: 260, y, text: rightKeys };
     drawButton(rightBtn, hoveredButton === 'remapRight');
     y += 45;
 
     // Atirar  (y=280)
     ctx.fillText('Atirar:', 100, y + 10);
-    const shootKeys = (settings.keyShoot || ['Space']).map(k => k.replace('Key','')).join(' / ');
+    const shootKeys = (settings.keyShoot || ['Space']).map(k => k.replace('Key', '')).join(' / ');
     const shootBtn  = { ...remapButtons.keyShoot, x: 260, y, text: shootKeys };
     drawButton(shootBtn, hoveredButton === 'remapShoot');
     y += 50;
@@ -201,8 +205,9 @@ const HUD = (() => {
   }
 
   // ──────────────── ABA SOM ────────────────────────────────────
-  // Posições Y calculadas e documentadas:
+  // ⚠️  CORREÇÃO: mesma razão — lê SettingsSystem.getAll().
   //
+  // Posições Y calculadas e documentadas:
   //  y=100 : slider masterVolume  → renderSlider(100, 108, 260, ...)
   //  y=150 : slider musicVolume   → renderSlider(100, 158, 260, ...)
   //  y=200 : slider sfxVolume     → renderSlider(100, 208, 260, ...)
@@ -211,8 +216,9 @@ const HUD = (() => {
   //    280, 322, 364, 406, 448, 490        (cada +42)
   // ─────────────────────────────────────────────────────────────
   function renderSoundTab() {
-    const settings     = window.SettingsSystem ? SettingsSystem.getAll()    : DEFAULT_SETTINGS;
-    const customSounds = window.AudioSystem    ? AudioSystem.getCustomSounds() : {};
+    // ← CORRIGIDO: sempre lê o estado atual de NEW_SETTINGS
+    const settings     = SettingsSystem.getAll();
+    const customSounds = window.AudioSystem ? AudioSystem.getCustomSounds() : {};
     let y = 100;
 
     ctx.font      = '14px "Courier New", monospace';
@@ -410,7 +416,6 @@ const HUD = (() => {
     drawText(`PONTOS: ${score}`,       CANVAS_W / 2, CANVAS_H / 2 - 10, 20, '#fff');
     drawText(`🏆 RECORDE: ${highScore}`, CANVAS_W / 2, CANVAS_H / 2 + 25, 15, '#ff0');
 
-    // Só exibe "NOVO RECORDE!" se realmente bateu o recorde esta partida
     if (newRecord) {
       drawShadowText('✨ NOVO RECORDE! ✨', CANVAS_W / 2, CANVAS_H / 2 + 55, 16, '#ff0');
     }
@@ -446,59 +451,46 @@ const HUD = (() => {
     highScore = currentHighScore;
     clear();
 
-    if (optionsActive)          { renderOptionsMenu();  return; }
+    if (optionsActive)              { renderOptionsMenu();  return; }
     if (showingPopup === 'credits') { renderCreditsPopup(); return; }
 
     switch (state) {
-      case STATE_MENU:     renderMenu();                            break;
-      case STATE_TUTORIAL: renderTutorial();                        break;
-      case STATE_RUNNING:  renderGameHUD(kills);                    break;
+      case STATE_MENU:     renderMenu();                               break;
+      case STATE_TUTORIAL: renderTutorial();                           break;
+      case STATE_RUNNING:  renderGameHUD(kills);                       break;
       case STATE_PAUSED:   renderGameHUD(kills); renderPauseOverlay(); break;
-      case STATE_GAMEOVER: renderGameOverOverlay(kills);            break;
-      case STATE_WIN:      renderWinOverlay(kills);                 break;
-      case STATE_CONFIRM:  renderConfirmOverlay(kills);             break;
+      case STATE_GAMEOVER: renderGameOverOverlay(kills);               break;
+      case STATE_WIN:      renderWinOverlay(kills);                    break;
+      case STATE_CONFIRM:  renderConfirmOverlay(kills);                break;
     }
   }
 
   // ──────────────── DETECÇÃO DE HOVER / CLIQUE ─────────────────
-  //
-  // IMPORTANTE: as faixas de Y aqui DEVEM corresponder às posições
-  // calculadas nas funções renderGameplayTab() e renderSoundTab().
-  // ─────────────────────────────────────────────────────────────
   function getButtonUnderMouse(mx, my) {
     // ── Menu de opções ──────────────────────────────────────────
     if (optionsActive) {
-      // Botão fechar
       const c = optionsButtons.close;
       if (mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h) return 'close_options';
 
-      // Abas
       const tg = optionsButtons.tabGameplay;
       if (mx >= tg.x && mx <= tg.x + tg.w && my >= tg.y && my <= tg.y + tg.h) return 'tabGameplay';
       const ts = optionsButtons.tabSound;
       if (mx >= ts.x && mx <= ts.x + ts.w && my >= ts.y && my <= ts.y + ts.h) return 'tabSound';
 
       if (optionsTab === 'gameplay') {
-        // mouseControl  → y=110, h=30
         if (mx >= 280 && mx <= 380 && my >= 110 && my <= 140) return 'mouseControl';
-        // remapLeft     → y=190, h=30
         if (mx >= 260 && mx <= 440 && my >= 190 && my <= 220) return 'remapLeft';
-        // remapRight    → y=235, h=30
         if (mx >= 260 && mx <= 440 && my >= 235 && my <= 265) return 'remapRight';
-        // remapShoot    → y=280, h=30
         if (mx >= 260 && mx <= 440 && my >= 280 && my <= 310) return 'remapShoot';
-        // resetControls → y=330, h=35
         if (mx >= CANVAS_W/2 - 100 && mx <= CANVAS_W/2 + 100 && my >= 330 && my <= 365) return 'resetControls';
 
       } else { // sound
-        // Sliders (área clicável generosa ±15px em torno do slider)
         if (mx >= 95 && mx <= 370) {
           if (my >= 100 && my <= 125) return 'slider_masterVolume';
           if (my >= 150 && my <= 175) return 'slider_musicVolume';
           if (my >= 200 && my <= 225) return 'slider_sfxVolume';
         }
 
-        // Upload buttons: y = 280, 322, 364, 406, 448, 490  (h=32 cada)
         const uploadYPositions = [280, 322, 364, 406, 448, 490];
         const uploadIds        = ['uploadShoot', 'uploadEnemyShoot', 'uploadExplosion',
                                   'uploadDamage', 'uploadGameOver', 'uploadMusic'];
@@ -542,21 +534,18 @@ const HUD = (() => {
   }
 
   function handleSliderClick(mx, sliderId) {
-    // Slider desenhado em x=100, width=260
     let value = Math.max(0, Math.min(1, (mx - 100) / 260));
-    if (sliderId === 'slider_masterVolume') SettingsSystem.set('masterVolume', value);
-    else if (sliderId === 'slider_musicVolume') SettingsSystem.set('musicVolume', value);
-    else if (sliderId === 'slider_sfxVolume')   SettingsSystem.set('sfxVolume',  value);
+    if      (sliderId === 'slider_masterVolume') SettingsSystem.set('masterVolume', value);
+    else if (sliderId === 'slider_musicVolume')  SettingsSystem.set('musicVolume',  value);
+    else if (sliderId === 'slider_sfxVolume')    SettingsSystem.set('sfxVolume',    value);
     return true;
   }
 
   function handleClick(mx, my, callbacks) {
     Object.assign(clickCallbacks, callbacks);
 
-    // Créditos: qualquer clique fecha
     if (showingPopup === 'credits') { showingPopup = null; return true; }
 
-    // Sliders (clique direto, antes da detecção de botão)
     if (optionsActive && optionsTab === 'sound' && mx >= 95 && mx <= 370) {
       if (my >= 100 && my <= 125) return handleSliderClick(mx, 'slider_masterVolume');
       if (my >= 150 && my <= 175) return handleSliderClick(mx, 'slider_musicVolume');
@@ -583,7 +572,7 @@ const HUD = (() => {
   function setLives(l)     { lives     = l; }
   function setHighScore(h) { highScore = h; }
   function setNewRecord(v) { newRecord = v; }
-  function setTab(tab)     { optionsTab = tab; }   // ← corrige troca de abas
+  function setTab(tab)     { optionsTab = tab; }
 
   function showOptions()   { optionsActive = true;  optionsTab = 'gameplay'; showingPopup = null; remappingAction = null; }
   function closeOptions()  { optionsActive = false; remappingAction = null; }

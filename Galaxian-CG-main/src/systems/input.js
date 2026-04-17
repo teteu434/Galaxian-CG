@@ -44,6 +44,13 @@ const Input = (() => {
       }
       return false;
     },
+    // ← NOVO: remove uma tecla do buffer de justPressed E de keys.
+    // Usar após remapeamento para impedir que a tecla "vaze" para o
+    // handleStateInputs no mesmo frame em que o remapping terminou.
+    suppress: code => {                  
+      justPressed.delete(code);
+      keys.delete(code);
+    },
 
     /** Chamado no fim de cada frame pelo game loop para limpar justPressed. */
     clearFrame: () => justPressed.clear(),
