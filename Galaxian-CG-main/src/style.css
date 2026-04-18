@@ -1,0 +1,141 @@
+/* ═══════════════════════════════════════════════════════════════
+   src/style.css
+   Estilos globais da página e do wrapper do canvas.
+   Separado do HTML para respeitar a separação entre estrutura
+   (HTML) e apresentação (CSS).
+═══════════════════════════════════════════════════════════════ */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* html + body preenchem exatamente o viewport sem scrollbar */
+html, body {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+  font-family: 'Courier New', monospace;
+  color: #0ff;
+}
+
+/* Coluna central: wrapper do jogo + barra de teclas */
+body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+/* ── Wrapper do jogo ─────────────────────────────────────────
+   Tamanho definido dinamicamente por fullscreen.js.
+   position:relative permite que #hud e #fsBtn sejam
+   posicionados em relação a ele.                              */
+#gameWrapper {
+  position: relative;
+  /* width e height são definidos por fullscreen.js */
+  flex-shrink: 0;
+}
+
+/* ── Canvas principal (WebGL) ────────────────────────────────
+   Os atributos width/height do elemento (480×640) definem o
+   buffer interno. O CSS width/height:100% faz o canvas
+   se esticar para preencher o #gameWrapper sem distorção,
+   pois o wrapper já tem a proporção correta.                  */
+#glCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 1px solid rgba(0, 255, 255, 0.18);
+  box-shadow: 0 0 32px rgba(0, 255, 255, 0.10), 0 0 64px rgba(0, 0, 255, 0.06);
+  /* Renderização nítida ao escalar (sem blur de interpolação) */
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;   /* Chrome/Edge */
+}
+
+/* ── HUD Canvas (2D overlay) ─────────────────────────────────
+   Cobre exatamente o glCanvas.
+   pointer-events:none → cliques passam para o glCanvas.       */
+#hud {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* ── Botão de tela cheia ─────────────────────────────────────
+   Posicionado no canto inferior direito do wrapper.
+   z-index alto para ficar acima do HUD.
+   pointer-events:auto porque #hud tem none, mas o botão
+   é irmão do hud (não filho), então não precisa sobrescrever.  */
+#fsBtn {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.65);
+  border: 1px solid rgba(0, 255, 255, 0.35);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.2s, background 0.2s;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#fsBtn:hover {
+  opacity: 1;
+  background: rgba(0, 255, 255, 0.12);
+}
+
+/* SVG icon dentro do botão */
+#fsBtn svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  stroke: #0ff;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ── Barra de atalhos de teclado ─────────────────────────────
+   Oculta quando o body tem a classe .fullscreen
+   (adicionada por fullscreen.js ao entrar em tela cheia).     */
+#keys {
+  font-size: 11px;
+  color: rgba(0, 255, 255, 0.5);
+  text-align: center;
+  letter-spacing: 1px;
+  flex-shrink: 0;
+  transition: opacity 0.25s;
+  white-space: nowrap;
+}
+
+#keys span {
+  color: #ff0;
+}
+
+body.fullscreen #keys {
+  display: none;
+}
+
+/* ── Fallback: tela muito pequena ────────────────────────────
+   Em janelas muito estreitas a barra de teclas pode quebrar;
+   escondemos antes que cause overflow.                        */
+@media (max-width: 360px) {
+  #keys {
+    display: none;
+  }
+}
