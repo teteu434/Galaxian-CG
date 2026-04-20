@@ -1,23 +1,36 @@
 // ═══════════════════════════════════════════════════════════════
 // src/core/game.js
 //
-// MUDANÇAS:
-//   - setupMouseEvents(): separado em mousemove (posição) e
-//     mousedown (tiro). Click direito agora também atira.
-//     Conversão de coordenadas centralizada em uma função.
-//   - update(): movimento por mouse usa Input.getMouseRawX()
-//     com conversão de escala, em vez de variável local mouseX.
-//   - handleStateInputs(): Enter no menu bloqueado quando HUD
-//     tem popup ou options aberto (fix do bug de créditos).
-//   - Tiro por mouse integrado ao ShootingSystem sem duplicar lógica.
+// MUDANÇAS (suporte a fases infinitas):
+//   · advanceLevel() substitui winGame() na condição de vitória.
+//     Chama LevelSystem.nextLevel() e define STATE_LEVEL_TRANSITION.
+//   · update() lida com STATE_LEVEL_TRANSITION: atualiza o timer do
+//     LevelSystem e, quando ele sinaliza "pronto", spawna a próxima
+//     wave com os parâmetros da nova fase.
+//   · kills agora é o acumulado total (killsAtLevelStart + wave atual).
+//     killsAtLevelStart é incrementado em advanceLevel().
+//   · resetAll() reseta LevelSystem e killsAtLevelStart.
+//   · render() passa STATE_RUNNING ao HUD durante a transição (para
+//     manter score/lives visíveis) e depois desenha o overlay de
+//     transição por cima via renderLevelTransition().
+//   · handleStateInputs() ignora input de movimento durante a transição.
+//   · winGame() mantida mas não é mais chamada automaticamente —
+//     o jogo é agora teoricamente infinito.
+//
+// Dependências adicionadas:
+//   LevelSystem      (systems/levelSystem.js)
+//   STATE_LEVEL_TRANSITION (definido em levelSystem.js)
 // ═══════════════════════════════════════════════════════════════
 "use strict";
 
 const Game = (() => {
   let lastTime  = 0;
-  let kills     = 0;
+  let kills     = 0;  // Total acumulado de kills (todas as fases)
   let rafId     = 0;
   let lives     = 3;
+
+  // kills das fases anteriores — somado ao atual para formar o score total
+  let killsAtLevelStart = 0;
 
   let highScore = (() => {
     try {
@@ -40,8 +53,6 @@ const Game = (() => {
   const PLAYER_MAX_X = CANVAS_W - PLAYER_W;
 
   // ── Utilitário: converte coordenadas da janela → canvas ───────
-  // Centralizado aqui para ser reutilizado por mousemove e mousedown.
-  // Necessário porque o canvas pode estar escalado via CSS (fullscreen).
   function windowToCanvas(clientX, clientY) {
     const canvas = document.getElementById('glCanvas');
     const rect   = canvas.getBoundingClientRect();
@@ -53,8 +64,6 @@ const Game = (() => {
     };
   }
 
-  // ── Converte posição bruta do Input para X no canvas ─────────
-  // Chamado a cada frame no update() quando mouseControl = true.
   function getMouseCanvasX() {
     const canvas = document.getElementById('glCanvas');
     const rect   = canvas.getBoundingClientRect();
@@ -62,15 +71,22 @@ const Game = (() => {
     return (Input.getMouseRawX() - rect.left) * scaleX;
   }
 
-  // ────────────────────────────────────────────────────────────
+  // ── Reset completo (novo jogo desde o menu) ───────────────────
   function resetAll() {
-    kills          = 0;
-    lives          = 3;
-    damageCooldown = 0;
+    kills             = 0;
+    killsAtLevelStart = 0;
+    lives             = 3;
+    damageCooldown    = 0;
+
+    // Reseta o LevelSystem para fase 1 antes de resetar o EnemySystem,
+    // pois EnemySystem.reset() usa as constantes base (fase 1) por padrão.
+    LevelSystem.reset();
+
     Player.reset();
     Bullet.reset();
     ShootingSystem.reset();
-    EnemySystem.reset();
+    EnemySystem.reset(); // sem params → constantes da fase 1
+
     HUD.setLives(lives);
     HUD.setHighScore(highScore);
     HUD.setNewRecord(false);
@@ -109,34 +125,113 @@ const Game = (() => {
     checkAndSaveHighScore(kills * 100);
   }
 
+  // Mantida para compatibilidade; não é mais chamada automaticamente
+  // no loop principal (o jogo é infinito — termina só com game over).
   function winGame() {
     GameState.set(STATE_WIN);
     AudioSystem.stopBackgroundMusic();
     checkAndSaveHighScore(kills * 100);
   }
 
-  function goToMenu() {
-    resetAll();
-    GameState.set(STATE_MENU);
+  /**
+   * Chamada quando todos os inimigos da wave atual são eliminados.
+   * Em vez de ir para STATE_WIN, avança para a próxima fase.
+   */
+  function advanceLevel() {
+    checkAndSaveHighScore(kills * 100);
+    // Acumula os kills desta wave no total histórico antes de resetar
+    killsAtLevelStart += EnemySystem.totalEnemies;
+
     AudioSystem.stopBackgroundMusic();
-    HUD.closeOptions();
-    HUD.closePopup();
+    LevelSystem.nextLevel();
+    GameState.set(STATE_LEVEL_TRANSITION);
+
+    console.log(
+      `[Game] Wave completa! Total kills acumulado: ${killsAtLevelStart} → fase ${LevelSystem.current}`
+    );
   }
 
-  function goToTutorial() {
-    GameState.set(STATE_TUTORIAL);
+  // ─────────────────────────────────────────────────────────────
+  // Overlay de transição entre fases (desenhado sobre o HUD)
+  // ─────────────────────────────────────────────────────────────
+
+  function renderLevelTransition() {
+    const hudCanvas = document.getElementById('hud');
+    const ctx       = hudCanvas.getContext('2d');
+    const level     = LevelSystem.current;
+    const progress  = LevelSystem.timerProgress;
+
+    // Fade-in rápido (primeiro quarto da duração) → permanece visível
+    const alpha = Math.min(progress * 4, 1);
+    const p     = LevelSystem.params(); // parâmetros da nova fase
+
+    ctx.save();
+
+    // ── Fundo escuro semi-transparente ────────────────────────
+    ctx.fillStyle = `rgba(0, 2, 20, ${0.82 * alpha})`;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    ctx.globalAlpha  = alpha;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+
+    // ── Título: fase anterior completa ────────────────────────
+    ctx.font      = `bold 38px "Courier New", monospace`;
+    ctx.fillStyle = '#00e5ff';
+    ctx.shadowColor = '#00e5ff';
+    ctx.shadowBlur  = 24;
+    ctx.fillText(`✦  FASE ${level - 1} COMPLETA!  ✦`, CANVAS_W / 2, CANVAS_H / 2 - 52);
+
+    // ── Próxima fase ──────────────────────────────────────────
+    ctx.shadowBlur  = 0;
+    ctx.font        = `bold 26px "Courier New", monospace`;
+    ctx.fillStyle   = '#ffffff';
+    ctx.fillText(`PREPARANDO FASE ${level}`, CANVAS_W / 2, CANVAS_H / 2);
+
+    // ── Dica dos parâmetros da próxima fase ───────────────────
+    ctx.font      = `14px "Courier New", monospace`;
+    ctx.fillStyle = '#80ffee';
+
+    const speedPct = Math.round((p.enemySpeed / 80 - 1) * 100);
+    const info     = `${p.rows} × ${p.cols} inimigos  |  velocidade +${speedPct}%  |  ${p.maxBullets} projéteis`;
+    ctx.fillText(info, CANVAS_W / 2, CANVAS_H / 2 + 42);
+
+    // ── Barra de progresso (timer visual) ────────────────────
+    const barW = 260;
+    const barH = 6;
+    const barX = CANVAS_W / 2 - barW / 2;
+    const barY = CANVAS_H / 2 + 76;
+
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(barX, barY, barW, barH);
+
+    ctx.fillStyle = '#00e5ff';
+    ctx.fillRect(barX, barY, barW * progress, barH);
+
+    ctx.restore();
   }
 
-  function createFileUpload(soundName, callback) {
-    const input  = document.createElement('input');
-    input.type   = 'file';
-    input.accept = 'audio/mpeg, audio/wav, audio/ogg';
-    input.onchange = (e) => {
-      const file = e.target.files[0];
-      if (file) callback(soundName, file);
-    };
-    input.click();
+  // ─────────────────────────────────────────────────────────────
+  // Indicador de fase (canto superior direito durante o jogo)
+  // ─────────────────────────────────────────────────────────────
+
+  function renderLevelBadge() {
+    const hudCanvas = document.getElementById('hud');
+    const ctx       = hudCanvas.getContext('2d');
+
+    ctx.save();
+    ctx.textAlign    = 'right';
+    ctx.textBaseline = 'top';
+    ctx.font         = `bold 13px "Courier New", monospace`;
+    ctx.fillStyle    = '#00e5ff';
+    ctx.globalAlpha  = 0.85;
+    ctx.fillText(`FASE ${LevelSystem.current}`, CANVAS_W - 10, 10);
+    ctx.restore();
   }
+
+  // ─────────────────────────────────────────────────────────────
+  // Configuração de callbacks e eventos (inalterado)
+  // ─────────────────────────────────────────────────────────────
 
   function setupHUDCallbacks() {
     const originalHandleClick = HUD.handleClick;
@@ -161,11 +256,9 @@ const Game = (() => {
         tabGameplay: () => { HUD.setTab('gameplay'); },
         tabSound:    () => { HUD.setTab('sound');    },
 
-
         mouseControl: () => {
           SettingsSystem.set('mouseControl', !SettingsSystem.get('mouseControl'));
         },
-        // NOVO: keyboardControl: ativa teclado, desativa mouse
         keyboardControl: () => {
           SettingsSystem.set('keyboardControl', !SettingsSystem.get('keyboardControl'));
         },
@@ -186,13 +279,21 @@ const Game = (() => {
     };
   }
 
+  function createFileUpload(soundName, callback) {
+    const input  = document.createElement('input');
+    input.type   = 'file';
+    input.accept = 'audio/mpeg, audio/wav, audio/ogg';
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (file) callback(soundName, file);
+    };
+    input.click();
+  }
+
   function setupMouseEvents() {
     const canvas    = document.getElementById('glCanvas');
     const hudCanvas = document.getElementById('hud');
 
-    // ── Hover do HUD (mousemove) ──────────────────────────────
-    // Separado do tiro: mousemove só atualiza o hover do HUD.
-    // O Input já rastreia a posição bruta via seu próprio listener.
     function onMouseMove(e) {
       const { x, y } = windowToCanvas(e.clientX, e.clientY);
       HUD.updateHover(x, y);
@@ -201,31 +302,19 @@ const Game = (() => {
     canvas.addEventListener('mousemove',    onMouseMove);
     hudCanvas.addEventListener('mousemove', onMouseMove);
 
-    // ── Clique do HUD / Tiro (mousedown) ─────────────────────
-    // Usamos mousedown (não 'click') porque:
-    //   1. Captura botão direito (button=2), que 'click' ignora
-    //   2. Resposta mais imediata para o tiro
-    //   3. Botão direito com preventDefault no 'contextmenu' (input.js)
-    //      impede o menu nativo mas não impede o mousedown
     function onMouseDown(e) {
       const { x, y } = windowToCanvas(e.clientX, e.clientY);
 
-      // Em remapping, nenhum clique deve passar para o jogo
       if (remappingAction) return;
 
-      // Tenta consumir o clique no HUD primeiro.
-      // Se o HUD tratou o clique (retornou true), não atira.
       const handledByHUD = HUD.handleClick(x, y, {});
       if (handledByHUD) return;
 
-      // Tiro por mouse: só dispara se mouseControl estiver ativo
-      // e o jogo estiver rodando. Botão esquerdo (0) ou direito (2).
       if (
         GameState.is(STATE_RUNNING) &&
         SettingsSystem.get('mouseControl') &&
         (e.button === 0 || e.button === 2)
       ) {
-        // Reutiliza ShootingSystem — sem duplicar lógica de cooldown
         const fired = ShootingSystem.tryShoot();
         if (fired) AudioSystem.playPlayerShoot();
       }
@@ -233,10 +322,6 @@ const Game = (() => {
 
     canvas.addEventListener('mousedown',    onMouseDown);
     hudCanvas.addEventListener('mousedown', onMouseDown);
-
-    // Mantém o 'click' apenas para compatibilidade com teclado ativo
-    // (modo teclado usa click para atirar via HUD, se aplicável)
-    // Removido: o mousedown já cobre tudo. Não duplicar.
   }
 
   function setupKeyboardRemapping() {
@@ -258,10 +343,30 @@ const Game = (() => {
     });
   }
 
+  function goToMenu() {
+    resetAll();
+    GameState.set(STATE_MENU);
+    AudioSystem.stopBackgroundMusic();
+    HUD.closeOptions();
+    HUD.closePopup();
+  }
+
+  function goToTutorial() {
+    GameState.set(STATE_TUTORIAL);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Input por estado
+  // ─────────────────────────────────────────────────────────────
+
   function handleStateInputs() {
     const state = GameState.get();
 
     if (remappingAction) return;
+
+    // Durante a transição de fase: ignora todo input do jogo.
+    // O jogador não pode mover, atirar ou pausar nesse intervalo.
+    if (state === STATE_LEVEL_TRANSITION) return;
 
     const keyLeft    = SettingsSystem.get('keyLeft')    || [];
     const keyRight   = SettingsSystem.get('keyRight')   || [];
@@ -275,25 +380,15 @@ const Game = (() => {
     const isPausePressed   = Input.wasPressedAny(keyPause);
     const isRestartPressed = Input.wasPressedAny(keyRestart);
 
-    // Movimento por teclado no loop (complementa o player.update())
-    // player.update() já tem o guard de mouseControl, mas aqui
-    // também guardamos para consistência e para evitar duplo movimento.
     if (state === STATE_RUNNING && !SettingsSystem.get('mouseControl')) {
       const dt = 0.016;
       if (isLeftPressed)  Player.setX(Math.max(PLAYER_MIN_X, Math.min(Player.x - PLAYER_SPEED * dt, PLAYER_MAX_X)));
       if (isRightPressed) Player.setX(Math.max(PLAYER_MIN_X, Math.min(Player.x + PLAYER_SPEED * dt, PLAYER_MAX_X)));
     }
 
-    // ── FIX DO BUG: Enter no menu ─────────────────────────────
-    // Antes, Enter iniciava o jogo mesmo com popup/options aberto.
-    // Agora verificamos se o HUD está "ocupado" antes de processar.
-    // HUD.isPopupOpen() e HUD.isOptionsOpen() devem existir no HUD
-    // (veja hudRenderer.js — adicionamos essas funções).
     if (state === STATE_MENU && Input.wasPressed('Enter')) {
       const popupOpen   = typeof HUD.isPopupOpen   === 'function' && HUD.isPopupOpen();
       const optionsOpen = typeof HUD.isOptionsOpen === 'function' && HUD.isOptionsOpen();
-
-      // Só inicia o jogo se nenhuma camada de UI estiver aberta
       if (!popupOpen && !optionsOpen) {
         hasShownTutorial ? startGame() : goToTutorial();
       }
@@ -328,23 +423,37 @@ const Game = (() => {
     }
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // Update principal
+  // ─────────────────────────────────────────────────────────────
+
   function update(dt) {
     const state = GameState.get();
 
+    // ── Transição de fase ─────────────────────────────────────
+    // O LevelSystem atualiza seu timer e sinaliza quando a transição
+    // termina. Quando isso ocorre, spawna a wave com os novos params.
+    if (state === STATE_LEVEL_TRANSITION) {
+      const waveReady = LevelSystem.update(dt);
+      if (waveReady) {
+        const p = LevelSystem.params();
+        EnemySystem.reset(p);
+        Bullet.reset();
+        GameState.set(STATE_RUNNING);
+        AudioSystem.startBackgroundMusic();
+        console.log('[Game] Nova wave iniciada com', p.rows * p.cols, 'inimigos.');
+      }
+      return; // nada mais roda durante a transição
+    }
+
+    // ── Jogo em execução ──────────────────────────────────────
     if (state === STATE_RUNNING) {
-      // ── Movimento por mouse ───────────────────────────────────
-      // Convertemos a posição bruta do Input para coordenadas do canvas
-      // aqui no update(), a cada frame, garantindo responsividade.
+
       if (SettingsSystem.get('mouseControl')) {
         const canvasX = getMouseCanvasX();
-        // Centraliza o player no cursor (subtrai metade da largura)
         Player.setX(Math.max(PLAYER_MIN_X, Math.min(canvasX - PLAYER_W / 2, PLAYER_MAX_X)));
       }
 
-      // ── Tiro por teclado (apenas se mouseControl = false) ────
-      // O tiro por mouse é tratado no mousedown (setupMouseEvents),
-      // não aqui, para evitar processar no update() e no evento
-      // simultaneamente (duplicação de tiros).
       if (!SettingsSystem.get('mouseControl')) {
         const keyShoot = SettingsSystem.get('keyShoot') || ['Space'];
         if (Input.wasPressedAny(keyShoot)) {
@@ -371,10 +480,17 @@ const Game = (() => {
         if (lives <= 0) { Player.kill(); gameOver(); }
       }
 
-      kills = ENEMY_COLS * ENEMY_ROWS - EnemySystem.aliveList().length;
-      if (EnemySystem.aliveList().length === 0) winGame();
+      // Score total = kills das fases anteriores + kills desta wave
+      kills = killsAtLevelStart + (EnemySystem.totalEnemies - EnemySystem.aliveList().length);
+
+      // Todos os inimigos da wave atual foram eliminados → avança fase
+      if (EnemySystem.aliveList().length === 0) advanceLevel();
     }
   }
+
+  // ─────────────────────────────────────────────────────────────
+  // Renderização
+  // ─────────────────────────────────────────────────────────────
 
   function render() {
     const { gl } = GL;
@@ -383,15 +499,40 @@ const Game = (() => {
     drawSprite(TEX.background, 0, 0, CANVAS_W, CANVAS_H);
 
     const state = GameState.get();
-    if (state === STATE_RUNNING || state === STATE_PAUSED ||
-        state === STATE_GAMEOVER || state === STATE_WIN || state === STATE_CONFIRM) {
+
+    // Sprites de jogo: visíveis durante o jogo ativo e na transição
+    if (
+      state === STATE_RUNNING        ||
+      state === STATE_PAUSED         ||
+      state === STATE_GAMEOVER       ||
+      state === STATE_WIN            ||
+      state === STATE_CONFIRM        ||
+      state === STATE_LEVEL_TRANSITION
+    ) {
       EnemySystem.draw();
       Bullet.draw();
       Player.draw();
     }
 
-    HUD.render(state, kills, lives, highScore);
+    // Passa STATE_RUNNING ao HUD quando estamos em transição para que
+    // o score e as vidas continuem visíveis durante a tela intermediária.
+    const hudState = state === STATE_LEVEL_TRANSITION ? STATE_RUNNING : state;
+    HUD.render(hudState, kills, lives, highScore);
+
+    // Indicador de fase no canto durante o jogo e a transição
+    if (state === STATE_RUNNING || state === STATE_LEVEL_TRANSITION) {
+      renderLevelBadge();
+    }
+
+    // Overlay de transição: desenhado POR CIMA do HUD
+    if (state === STATE_LEVEL_TRANSITION) {
+      renderLevelTransition();
+    }
   }
+
+  // ─────────────────────────────────────────────────────────────
+  // Game loop
+  // ─────────────────────────────────────────────────────────────
 
   function loop(timestamp) {
     const dt = Math.min((timestamp - lastTime) / 1000, 0.1);
