@@ -220,12 +220,14 @@ const Game = (() => {
     const ctx       = hudCanvas.getContext('2d');
 
     ctx.save();
-    ctx.textAlign    = 'right';
+    ctx.textAlign    = 'center';
     ctx.textBaseline = 'top';
     ctx.font         = `bold 13px "Courier New", monospace`;
     ctx.fillStyle    = '#00e5ff';
     ctx.globalAlpha  = 0.85;
-    ctx.fillText(`FASE ${LevelSystem.current}`, CANVAS_W - 10, 10);
+
+    ctx.fillText(`FASE ${LevelSystem.current}`, hudCanvas.width / 2, 10);
+
     ctx.restore();
   }
 
