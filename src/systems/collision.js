@@ -37,7 +37,6 @@ const CollisionSystem = (() => {
           Bullet.x, Bullet.y, BULLET_W, BULLET_H,
           ep.x,     ep.y,     ENEMY_W,  ENEMY_H
         )) {
-          console.log(`[CollisionSystem] Tiro atingiu inimigo ${e}!`);
           Bullet.deactivate();   // remove o tiro
           EnemySystem.killEnemy(e); // destrói o inimigo
           break; // 1 tiro = 1 inimigo; para de verificar
@@ -54,7 +53,9 @@ const CollisionSystem = (() => {
           Player.x, Player.y, PLAYER_W,  PLAYER_H
         )) {
           b.active = false;
-          return true;
+          return {
+            type : 'player_hit'
+          }
         }
       }
 
@@ -64,10 +65,10 @@ const CollisionSystem = (() => {
         if (aabbOverlap(
           Player.x, Player.y, PLAYER_W, PLAYER_H,
           ep.x,     ep.y,     ENEMY_W,  ENEMY_H
-        )) {
-          Player.kill();
-          setTimeout(() => GameState.set(STATE_GAMEOVER), 600);
-          return true;
+        )) {         
+          return {
+            type: 'death'
+          };
         }
       }
 
@@ -75,9 +76,9 @@ const CollisionSystem = (() => {
       for (const e of alive) {
         const ep = EnemySystem.absPos(e);
         if (ep.y + ENEMY_H >= PLAYER_Y) {
-          Player.kill();
-          setTimeout(() => GameState.set(STATE_GAMEOVER), 600);
-          return true;
+          return {
+            type: 'death'
+          };
         }
       }
     }

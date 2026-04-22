@@ -122,6 +122,7 @@ const Game = (() => {
     setTimeout(() => GameState.set(STATE_GAMEOVER), 600);
     AudioSystem.stopBackgroundMusic();
     AudioSystem.playGameOver();
+    kills = (killsAtLevelStart + (EnemySystem.totalEnemies - EnemySystem.aliveList().length));
     checkAndSaveHighScore(kills * 100);
   }
 
@@ -130,6 +131,7 @@ const Game = (() => {
   function winGame() {
     GameState.set(STATE_WIN);
     AudioSystem.stopBackgroundMusic();
+    kills = (killsAtLevelStart + (EnemySystem.totalEnemies - EnemySystem.aliveList().length));
     checkAndSaveHighScore(kills * 100);
   }
 
@@ -472,19 +474,30 @@ const Game = (() => {
       if (damageCooldown > 0) damageCooldown -= dt;
 
       const hit = CollisionSystem.check();
-
+      
       if (hit && Player.alive && damageCooldown <= 0) {
-        Player.setHit(true);
-        lives--;
-        damageCooldown = DAMAGE_COOLDOWN;
-        HUD.setLives(lives);
-        AudioSystem.playDamage();
-        if (lives <= 0) { Player.kill(); gameOver(); }
+        
+        if(hit?.type === "death"){
+          Player.kill();
+          gameOver();
+          return;
+
+        } else {
+          Player.setHit(true);
+          lives--;
+          damageCooldown = DAMAGE_COOLDOWN;
+          HUD.setLives(lives);
+          AudioSystem.playDamage();
+
+          if (lives <= 0) {
+            Player.kill(); 
+            gameOver(); 
+          }
+        }
       }
 
       // Score total = kills das fases anteriores + kills desta wave
       kills = killsAtLevelStart + (EnemySystem.totalEnemies - EnemySystem.aliveList().length);
-
       // Todos os inimigos da wave atual foram eliminados → avança fase
       if (EnemySystem.aliveList().length === 0) advanceLevel();
     }

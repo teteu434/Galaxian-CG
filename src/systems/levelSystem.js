@@ -134,23 +134,6 @@ const LevelSystem = (() => {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // Debug: imprime evolução de dificuldade no console
-  // ─────────────────────────────────────────────────────────────
-  function _debugLog(level) {
-    const p = _computeParams(level);
-    console.groupCollapsed(`[LevelSystem] ▶ Fase ${level} iniciada`);
-    console.table({
-      'Velocidade bloco (px/s)': p.enemySpeed.toFixed(1),
-      'Aceleração/morte (px/s)': p.speedInc.toFixed(1),
-      'Intervalo disparo (s)':   p.fireInterval.toFixed(2),
-      'Projéteis simultâneos':   p.maxBullets,
-      'Formação (linhas×cols)':  `${p.rows} × ${p.cols}`,
-      'Total inimigos':          p.rows * p.cols,
-    });
-    console.groupEnd();
-  }
-
-  // ─────────────────────────────────────────────────────────────
   // API pública
   // ─────────────────────────────────────────────────────────────
 
@@ -159,7 +142,6 @@ const LevelSystem = (() => {
     currentLevel    = 1;
     transitioning   = false;
     transitionTimer = 0;
-    _debugLog(1);
   }
 
   /**
@@ -170,7 +152,6 @@ const LevelSystem = (() => {
     currentLevel++;
     transitioning   = true;
     transitionTimer = 0;
-    _debugLog(currentLevel);
   }
 
   /**

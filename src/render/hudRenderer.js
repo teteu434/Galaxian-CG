@@ -265,18 +265,18 @@ const HUD = (() => {
     ctx.fillStyle = '#0ff';
     ctx.textAlign = 'left';
 
-    ctx.fillText('Volume Geral:', 100, y + 5);
-    renderSlider(100, y + 8, 260, settings.masterVolume || 0.7);
+    ctx.fillText('Volume Geral:', 100, y + 13);
+    renderSlider(100, y + 20, 260, settings.masterVolume || 0.7);
     ctx.fillText(`${Math.round((settings.masterVolume || 0.7) * 100)}%`, 375, y + 14);
     y += 50;
 
     ctx.fillText('Volume da Música:', 100, y + 5);
-    renderSlider(100, y + 8, 260, settings.musicVolume || 0.5);
+    renderSlider(100, y + 12, 260, settings.musicVolume || 0.5);
     ctx.fillText(`${Math.round((settings.musicVolume || 0.5) * 100)}%`, 375, y + 14);
     y += 50;
 
     ctx.fillText('Volume dos Efeitos:', 100, y + 5);
-    renderSlider(100, y + 8, 260, settings.sfxVolume || 0.8);
+    renderSlider(100, y + 12, 260, settings.sfxVolume || 0.8);
     ctx.fillText(`${Math.round((settings.sfxVolume || 0.8) * 100)}%`, 375, y + 14);
     y += 55;
 
@@ -348,15 +348,18 @@ const HUD = (() => {
     ctx.font      = '15px "Courier New", monospace';
     ctx.fillStyle = '#0ff';
     ctx.textAlign = 'left';
+
     const instructions = [
       '🎮 CONTROLES:','',
-      '• ← →  ou  A D  →  Movimentar nave',
-      '• ESPAÇO ou CLICK →  Atirar',
-      '• P ou ESC →  Pausar',
-      '• R →  Reiniciar','',
+      '• Movimento: ← → / A D ou Mouse',
+      '• Atirar: ESPAÇO ou Clique',
+      '• P ou ESC → Pausar',
+      '• R → Reiniciar','',
       '🎯 OBJETIVO:','Destrua todos os inimigos!','',
-      '⭐ DICA:','Use o mouse para mirar!'
+      '⭐ DICA 1:','Use teclado OU mouse, não os dois.',
+      '⭐ DICA 2:','Altere controles em Opções.'
     ];
+
     let y = 130;
     for (const line of instructions) {
       if (line === '') { y += 12; continue; }
