@@ -393,19 +393,29 @@ const HUD = (() => {
   }
 
   // ──────────────── CRÉDITOS ───────────────────────────────────
-  function renderCreditsPopup() {
-    ctx.fillStyle = 'rgba(0,0,0,0.95)';
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    drawShadowText('🌟 CRÉDITOS 🌟', CANVAS_W / 2, 150, 28, '#ff0');
-    ctx.font      = '14px "Courier New", monospace';
-    ctx.fillStyle = '#0ff';
-    ctx.textAlign = 'center';
-    ctx.fillText('Desenvolvido com WebGL e Canvas 2D', CANVAS_W / 2, 230);
-    ctx.fillText('Inspirado no clássico GALAXIAN (1979)', CANVAS_W / 2, 270);
-    ctx.fillText('Efeitos visuais: Shaders personalizados', CANVAS_W / 2, 310);
-    ctx.fillText('Música e SFX: Síntese procedural', CANVAS_W / 2, 350);
-    drawText('[ Clique para fechar ]', CANVAS_W / 2, 520, 14, '#888');
-  }
+function renderCreditsPopup() {
+  ctx.fillStyle = 'rgba(0,0,0,0.95)';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  drawShadowText('🌟 CRÉDITOS 🌟', CANVAS_W / 2, 130, 28, '#ff0');
+
+  ctx.font      = '14px "Courier New", monospace';
+  ctx.fillStyle = '#0ff';
+  ctx.textAlign = 'center';
+
+  ctx.fillText('Desenvolvido com WebGL + Canvas 2D', CANVAS_W / 2, 210);
+  ctx.fillText('HTML, CSS e JavaScript puro', CANVAS_W / 2, 240);
+
+  ctx.fillText('Por:', CANVAS_W / 2, 300);
+  ctx.fillText('Matheus Henrique Costa Oliveira', CANVAS_W / 2, 330);
+  ctx.fillText('Felipe Alcantara Borges', CANVAS_W / 2, 355);
+
+  ctx.fillText('Agradecimento especial ao', CANVAS_W / 2, 420);
+  ctx.fillText('Prof. Flavio Coutinho, pela excelente', CANVAS_W / 2, 445);
+  ctx.fillText('orientação e dedicação ao projeto.', CANVAS_W / 2, 470);
+
+  drawText('[ Clique para fechar ]', CANVAS_W / 2, 540, 14, '#888');
+}
 
   // ──────────────── GAME OVER ──────────────────────────────────
   function renderGameOverOverlay(kills) {
